@@ -1,6 +1,6 @@
 # Hey, this is CNAP 👋
 
-![landing page screenshot](./lpscreenshot.png)
+![landing page screenshot](./landing.png)
 
 We're building the future of cloud-native application platforms. Since our inception, we've been working tirelessly to create a unified ecosystem for developers, providers, and users of cloud-native apps. Our mission? To simplify the installation, management, and monetization of cloud-native applications while providing a secure and user-friendly environment for all stakeholders.
 
