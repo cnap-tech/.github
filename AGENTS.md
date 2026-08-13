@@ -22,6 +22,14 @@ The rendered profile content lives in `profile/README.md`.
 - After README changes, scan for broken relative asset links.
 - Preview rendered Markdown before shipping visual changes.
 
+## GitHub Actions runners
+
+- Read [RUNNERS.md](RUNNERS.md) before selecting a self-hosted runner label.
+- Treat [runner-profiles.json](runner-profiles.json) as the machine-readable
+  resource and capability contract.
+- Use only the stable labels in that catalog; do not encode backend, runtime,
+  provider, or node details in repository workflows.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this

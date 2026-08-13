@@ -29,6 +29,8 @@ software from one workspace.
 - [Docs](https://docs.akua.dev) - learn the platform concepts and workflows.
 - [AI & Agents](https://docs.akua.dev/ai) - connect external AI tools through
   MCP or use hosted agents in the dashboard.
+- [GitHub Actions runner profiles](../RUNNERS.md) - select the stable
+  self-hosted CI label by declared resources and capabilities.
 - [Bring your own cloud](https://docs.akua.dev/platform/byoc) - understand how
   Akua works with infrastructure you own.
 
