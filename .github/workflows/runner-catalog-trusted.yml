@@ -9,6 +9,7 @@ on:
       - runner-profiles.yaml
       - script/validate_runner_catalog.rb
       - script/check_runner_catalog_lifecycle.rb
+      - script/check_runner_catalog_trust_boundary.rb
       - .github/workflows/runner-catalog.yml
       - .github/workflows/runner-catalog-trusted.yml
   push:
@@ -20,8 +21,10 @@ on:
       - runner-profiles.yaml
       - script/validate_runner_catalog.rb
       - script/check_runner_catalog_lifecycle.rb
+      - script/check_runner_catalog_trust_boundary.rb
       - test/runner_catalog_test.rb
       - test/runner_catalog_lifecycle_test.rb
+      - test/runner_catalog_trust_boundary_test.rb
       - .github/workflows/runner-catalog.yml
       - .github/workflows/runner-catalog-trusted.yml
 
@@ -38,6 +41,8 @@ jobs:
         run: ruby test/runner_catalog_test.rb
       - name: Exercise catalog lifecycle contract
         run: ruby test/runner_catalog_lifecycle_test.rb
+      - name: Exercise trust boundary contract
+        run: ruby test/runner_catalog_trust_boundary_test.rb
 
   verify-published:
     if: github.event_name == 'push'
@@ -107,6 +112,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           path: .candidate
           persist-credentials: false
+      - name: Verify trusted boundary
+        run: ruby .trusted/script/check_runner_catalog_trust_boundary.rb --trusted-root .trusted --candidate-root .candidate
+      - name: Exercise base-owned infrastructure
+        run: ruby .trusted/test/runner_catalog_test.rb && ruby .trusted/test/runner_catalog_lifecycle_test.rb && ruby .trusted/test/runner_catalog_trust_boundary_test.rb
       - name: Check catalog lifecycle
         id: lifecycle
         run: echo "action=$(ruby .trusted/script/check_runner_catalog_lifecycle.rb --previous-root .trusted --current-root .candidate)" >> "$GITHUB_OUTPUT"

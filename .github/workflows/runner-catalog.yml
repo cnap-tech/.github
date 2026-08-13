@@ -5,8 +5,10 @@ on:
     paths:
       - script/validate_runner_catalog.rb
       - script/check_runner_catalog_lifecycle.rb
+      - script/check_runner_catalog_trust_boundary.rb
       - test/runner_catalog_test.rb
       - test/runner_catalog_lifecycle_test.rb
+      - test/runner_catalog_trust_boundary_test.rb
       - .github/workflows/runner-catalog.yml
       - .github/workflows/runner-catalog-trusted.yml
       - RUNNERS.md
@@ -18,8 +20,10 @@ on:
     paths:
       - script/validate_runner_catalog.rb
       - script/check_runner_catalog_lifecycle.rb
+      - script/check_runner_catalog_trust_boundary.rb
       - test/runner_catalog_test.rb
       - test/runner_catalog_lifecycle_test.rb
+      - test/runner_catalog_trust_boundary_test.rb
       - .github/workflows/runner-catalog.yml
       - .github/workflows/runner-catalog-trusted.yml
       - RUNNERS.md
@@ -39,6 +43,8 @@ jobs:
         run: ruby test/runner_catalog_test.rb
       - name: Exercise catalog lifecycle contract
         run: ruby test/runner_catalog_lifecycle_test.rb
+      - name: Exercise trust boundary contract
+        run: ruby test/runner_catalog_trust_boundary_test.rb
       - name: Validate published catalog when present
         if: hashFiles('runner-profiles.json') != ''
         run: ruby script/validate_runner_catalog.rb
