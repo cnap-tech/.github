@@ -62,7 +62,7 @@ class RunnerCatalogTest < Minitest::Test
       catalog = JSON.parse(File.read(File.join(candidate, "runner-profiles.json")))
       catalog.fetch("profiles").last.fetch("workload").fetch("recommended") << "Kubernetes-backed builds"
       write_catalog(candidate, catalog)
-      assert_validator_failure(candidate, "runtime or provider detail in public catalog")
+      assert_validator_failure(candidate, "public workload semantics drift")
     end
   end
 
@@ -81,6 +81,48 @@ class RunnerCatalogTest < Minitest::Test
       File.write(source_file, YAML.dump(source_catalog))
       update_provenance(candidate, Digest::SHA256.file(source_file).hexdigest)
       assert_validator_failure(candidate, "canonical source normalization drift", source)
+    end
+  end
+
+  def test_initial_pull_request_fails_without_trusted_base_workflow
+    Dir.mktmpdir do |base_root|
+      script = File.expand_path("../script/require_trusted_catalog_workflow.rb", __dir__)
+      stdout, stderr, status = Open3.capture3(RbConfig.ruby, script, "--base-root", base_root)
+      refute status.success?, stdout
+      assert_includes stderr, "not installed on the base commit"
+    end
+  end
+
+  def test_bootstrap_boundary_accepts_installed_trusted_workflow
+    Dir.mktmpdir do |base_root|
+      workflow = File.join(base_root, ".github/workflows/runner-catalog-trusted.yml")
+      FileUtils.mkdir_p(File.dirname(workflow))
+      File.write(workflow, "name: trusted\n")
+      script = File.expand_path("../script/require_trusted_catalog_workflow.rb", __dir__)
+      stdout, stderr, status = Open3.capture3(RbConfig.ruby, script, "--base-root", base_root)
+      assert status.success?, "#{stdout}\n#{stderr}"
+    end
+  end
+
+  def test_trusted_validator_rejects_source_workload_drift
+    with_source_candidate do |candidate, source|
+      source_file = File.join(source, SOURCE_PATH)
+      source_catalog = YAML.safe_load(File.read(source_file), aliases: false)
+      source_catalog.fetch("profiles").last.fetch("workload").fetch("recommended")[0] = "provider-backed compilation"
+      File.write(source_file, YAML.dump(source_catalog))
+      update_provenance(candidate, Digest::SHA256.file(source_file).hexdigest)
+      assert_validator_failure(candidate, "canonical source workload drift", source)
+    end
+  end
+
+  def test_trusted_validator_rejects_provider_specific_source_class
+    with_source_candidate do |candidate, source|
+      source_file = File.join(source, SOURCE_PATH)
+      source_catalog = YAML.safe_load(File.read(source_file), aliases: false)
+      source_catalog.fetch("profiles").last["class"] = "aws-x64"
+      File.write(source_file, YAML.dump(source_catalog))
+      update_provenance(candidate, Digest::SHA256.file(source_file).hexdigest)
+      assert_validator_failure(candidate, "canonical source profile identity drift", source)
     end
   end
 
@@ -112,9 +154,55 @@ class RunnerCatalogTest < Minitest::Test
     source.fetch("metadata").delete("provenance")
     source.fetch("policy").delete("selection")
     source.fetch("profiles").each do |profile|
-      profile["id"] = profile.fetch("id")
-      profile["class"] = profile.fetch("class")
+      label = profile.fetch("label")
+      profile["id"] = {
+        "akua-x64-ci-v2" => "linux-x64-standard-v2",
+        "akua-docker-ci-v2" => "linux-x64-docker-v2",
+        "akua-heavy-ci-v2" => "linux-x64-heavy-v2"
+      }.fetch(label)
+      profile["class"] = {
+        "akua-x64-ci-v2" => "linux-x64",
+        "akua-docker-ci-v2" => "docker-x64",
+        "akua-heavy-ci-v2" => "heavy-x64"
+      }.fetch(label)
+      profile["displayName"] = {
+        "akua-x64-ci-v2" => "Linux x64 standard",
+        "akua-docker-ci-v2" => "Linux x64 Docker",
+        "akua-heavy-ci-v2" => "Linux x64 heavy"
+      }.fetch(label)
       profile["capabilities"] = profile.dig("capabilities", "guaranteed")
+      profile["workload"] = {
+        "akua-x64-ci-v2" => {
+          "recommended" => [
+            "linting, formatting, unit tests and ordinary compilation",
+            "jobs that do not start containers or require large local caches"
+          ],
+          "exclusions" => [
+            "Docker, Buildx and GitHub Actions service containers",
+            "nested virtualization, KVM and architecture-specific non-x64 builds"
+          ]
+        },
+        "akua-docker-ci-v2" => {
+          "recommended" => [
+            "Docker and Buildx image builds",
+            "integration tests using Docker or GitHub Actions service containers"
+          ],
+          "exclusions" => [
+            "nested virtualization, KVM and architecture-specific non-x64 builds",
+            "workloads declaring resources above this profile; use the heavy profile"
+          ]
+        },
+        "akua-heavy-ci-v2" => {
+          "recommended" => [
+            "memory-heavy compilation, packaging and browser or integration suites",
+            "Docker jobs whose declared requirements exceed the Docker profile"
+          ],
+          "exclusions" => [
+            "nested virtualization, KVM and architecture-specific non-x64 builds",
+            "workloads requiring more than the stated minimum resource contract"
+          ]
+        }
+      }.fetch(label)
     end
     source
   end

@@ -18,34 +18,96 @@ class RunnerCatalogValidator
     "privilegedContainers" => "privileged containers"
   }.freeze
   PUBLIC_CAPABILITIES = (CAPABILITY_NAMES.values + [BASELINE_CAPABILITY]).freeze
-  PUBLIC_WORKLOADS = {
+  PROFILE_DEFINITIONS = {
     "akua-x64-ci-v2" => {
-      "recommended" => [
-        "linting, formatting, unit tests and ordinary compilation",
-        "jobs that do not start containers or require large local caches"
-      ],
-      "exclusions" => [
-        "Docker, Buildx and service containers",
-        "workloads whose requirements exceed the Standard guarantees"
-      ]
+      "sourceId" => "linux-x64-standard-v2",
+      "sourceClass" => "linux-x64",
+      "sourceDisplayName" => "Linux x64 standard",
+      "id" => "standard-v2",
+      "class" => "standard",
+      "displayName" => "Standard"
     },
     "akua-docker-ci-v2" => {
-      "recommended" => [
-        "Docker and Buildx image builds",
-        "integration tests using Docker or service containers"
-      ],
-      "exclusions" => [
-        "workloads whose requirements exceed the Docker guarantees; use Heavy only when all Heavy bounds fit"
-      ]
+      "sourceId" => "linux-x64-docker-v2",
+      "sourceClass" => "docker-x64",
+      "sourceDisplayName" => "Linux x64 Docker",
+      "id" => "docker-v2",
+      "class" => "docker",
+      "displayName" => "Docker"
     },
     "akua-heavy-ci-v2" => {
-      "recommended" => [
-        "memory-heavy compilation, packaging and browser or integration suites that fit the Heavy guarantees",
-        "Docker jobs whose declared requirements exceed Docker but fit Heavy"
-      ],
-      "exclusions" => [
-        "workloads requiring more than 4 vCPU, 7168 MiB memory or 20480 MiB usable disk; use an external runner or reduce requirements"
-      ]
+      "sourceId" => "linux-x64-heavy-v2",
+      "sourceClass" => "heavy-x64",
+      "sourceDisplayName" => "Linux x64 heavy",
+      "id" => "heavy-v2",
+      "class" => "heavy",
+      "displayName" => "Heavy"
+    }
+  }.freeze
+  SOURCE_WORKLOAD_NORMALIZATIONS = {
+    "akua-x64-ci-v2" => {
+      "source" => {
+        "recommended" => [
+          "linting, formatting, unit tests and ordinary compilation",
+          "jobs that do not start containers or require large local caches"
+        ],
+        "exclusions" => [
+          "Docker, Buildx and GitHub Actions service containers",
+          "nested virtualization, KVM and architecture-specific non-x64 builds"
+        ]
+      },
+      "public" => {
+        "recommended" => [
+          "linting, formatting, unit tests and ordinary compilation",
+          "jobs that do not start containers or require large local caches"
+        ],
+        "exclusions" => [
+          "Docker, Buildx and service containers",
+          "workloads whose requirements exceed the Standard guarantees"
+        ]
+      }
+    },
+    "akua-docker-ci-v2" => {
+      "source" => {
+        "recommended" => [
+          "Docker and Buildx image builds",
+          "integration tests using Docker or GitHub Actions service containers"
+        ],
+        "exclusions" => [
+          "nested virtualization, KVM and architecture-specific non-x64 builds",
+          "workloads declaring resources above this profile; use the heavy profile"
+        ]
+      },
+      "public" => {
+        "recommended" => [
+          "Docker and Buildx image builds",
+          "integration tests using Docker or service containers"
+        ],
+        "exclusions" => [
+          "workloads whose requirements exceed the Docker guarantees; use Heavy only when all Heavy bounds fit"
+        ]
+      }
+    },
+    "akua-heavy-ci-v2" => {
+      "source" => {
+        "recommended" => [
+          "memory-heavy compilation, packaging and browser or integration suites",
+          "Docker jobs whose declared requirements exceed the Docker profile"
+        ],
+        "exclusions" => [
+          "nested virtualization, KVM and architecture-specific non-x64 builds",
+          "workloads requiring more than the stated minimum resource contract"
+        ]
+      },
+      "public" => {
+        "recommended" => [
+          "memory-heavy compilation, packaging and browser or integration suites that fit the Heavy guarantees",
+          "Docker jobs whose declared requirements exceed Docker but fit Heavy"
+        ],
+        "exclusions" => [
+          "workloads requiring more than 4 vCPU, 7168 MiB memory or 20480 MiB usable disk; use an external runner or reduce requirements"
+        ]
+      }
     }
   }.freeze
   SELECTION = {
@@ -59,8 +121,13 @@ class RunnerCatalogValidator
   PROFILE_KEYS = %w[capabilities class deprecation displayName id label minimumResources status workload].freeze
   METADATA_KEYS = %w[contractVersion documentation name provenance].freeze
   PROVENANCE_KEYS = %w[path repository revision sha256].freeze
-  BANNED_PUBLIC_KEYS = %w[allowedExternalLabelPatterns backend distribution imageContractVersion node platform provider runtime runtimeSpecificLabelPatterns].freeze
-  BANNED_PUBLIC_VALUE = /\b(?:arc|fireactions|firecracker|hetzner|kata|kubernetes|ubuntu|containerd|kvm|proxmox)\b/i
+  PUBLIC_API_VERSION = "runners.akua.dev/v1alpha1"
+  PUBLIC_KIND = "RunnerProfileCatalog"
+  REQUIREMENT_ENVIRONMENT = {
+    "cpu" => "AKUA_CI_REQUIRED_VCPU",
+    "memoryMiB" => "AKUA_CI_REQUIRED_MEMORY_MIB",
+    "diskMiB" => "AKUA_CI_REQUIRED_DISK_MIB"
+  }.freeze
 
   def initialize(candidate_root:, source_root: nil)
     @candidate_root = File.expand_path(candidate_root)
@@ -94,6 +161,8 @@ class RunnerCatalogValidator
   def validate_public_contract!(catalog)
     metadata = catalog.fetch("metadata")
     fail_with("provider-neutral metadata drift") unless metadata.keys.sort == METADATA_KEYS
+    fail_with("catalog api schema drift") unless catalog.fetch("apiVersion") == PUBLIC_API_VERSION && catalog.fetch("kind") == PUBLIC_KIND
+    fail_with("catalog contract version drift") unless metadata.fetch("contractVersion") == "2.0.0"
     fail_with("catalog name drift") unless metadata.fetch("name") == "akua-ci-catalog"
     fail_with("documentation drift") unless metadata.fetch("documentation") == DOCUMENTATION
 
@@ -105,8 +174,6 @@ class RunnerCatalogValidator
     }
     fail_with("missing source revision") unless provenance.fetch("revision", "").match?(/\A[0-9a-f]{40}\z/)
     fail_with("missing source SHA-256") unless provenance.fetch("sha256", "").match?(/\A[0-9a-f]{64}\z/)
-    fail_with("runtime or provider detail in public catalog") if contains_forbidden_detail?(catalog)
-
     capacity = catalog.fetch("capacity")
     expected_capacity = {
       "scope" => "organization",
@@ -122,13 +189,22 @@ class RunnerCatalogValidator
 
     policy = catalog.fetch("policy")
     fail_with("selection policy drift") unless policy.keys.sort == %w[requirementEnvironment selection]
+    fail_with("requirement environment drift") unless policy.fetch("requirementEnvironment") == REQUIREMENT_ENVIRONMENT
     fail_with("selection policy drift") unless policy.fetch("selection") == SELECTION
 
     profiles = catalog.fetch("profiles")
     fail_with("stable labels drift") unless profiles.map { |profile| profile.fetch("label") } == SELECTION.fetch("order")
     profiles.each do |profile|
       fail_with("provider-specific profile fields") unless profile.keys.sort == PROFILE_KEYS
+      definition = PROFILE_DEFINITIONS.fetch(profile.fetch("label")) { fail_with("stable labels drift") }
+      fail_with("public profile identity drift") unless profile.slice("id", "class", "displayName") == definition.slice("id", "class", "displayName")
+      fail_with("public profile resources drift") unless profile.fetch("minimumResources").keys.sort == %w[memoryMiB usableDiskMiB vcpu]
+      fail_with("public profile resources drift") unless profile.fetch("minimumResources").values.all? { |value| value.is_a?(Integer) && value.positive? }
+      capabilities = profile.fetch("capabilities")
+      fail_with("public capability schema drift") unless capabilities.keys == ["guaranteed"]
+      fail_with("public capability vocabulary drift") unless capabilities.fetch("guaranteed").all? { |capability| PUBLIC_CAPABILITIES.include?(capability) }
       fail_with("missing baseline capability") unless profile.dig("capabilities", "guaranteed").include?(BASELINE_CAPABILITY)
+      fail_with("public workload semantics drift") unless profile.fetch("workload") == SOURCE_WORKLOAD_NORMALIZATIONS.fetch(profile.fetch("label")).fetch("public")
       fail_with("profile status drift") unless profile.fetch("status") == "active"
       fail_with("profile deprecation drift") unless profile.fetch("deprecation") == {
         "deprecated" => false,
@@ -192,9 +268,11 @@ class RunnerCatalogValidator
   end
 
   def normalize_source(source, provenance)
+    fail_with("canonical source api schema drift") unless source.fetch("apiVersion") == PUBLIC_API_VERSION && source.fetch("kind") == PUBLIC_KIND
+    fail_with("canonical source contract version drift") unless source.dig("metadata", "contractVersion") == "2.0.0"
     {
-      "apiVersion" => source.fetch("apiVersion"),
-      "kind" => source.fetch("kind"),
+      "apiVersion" => PUBLIC_API_VERSION,
+      "kind" => PUBLIC_KIND,
       "metadata" => {
         "name" => "akua-ci-catalog",
         "contractVersion" => source.dig("metadata", "contractVersion"),
@@ -203,7 +281,7 @@ class RunnerCatalogValidator
       },
       "capacity" => normalize_capacity(source.fetch("capacity")),
       "policy" => {
-        "requirementEnvironment" => source.dig("policy", "requirementEnvironment"),
+        "requirementEnvironment" => normalize_requirement_environment(source.dig("policy", "requirementEnvironment")),
         "selection" => SELECTION
       },
       "profiles" => source.fetch("profiles").map { |profile| normalize_profile(profile) }
@@ -211,22 +289,43 @@ class RunnerCatalogValidator
   end
 
   def normalize_capacity(capacity)
-    capacity.slice("scope", "allocation", "maxConcurrentJobs", "queueSlo", "notes")
+    expected = {
+      "scope" => "organization",
+      "allocation" => "shared",
+      "maxConcurrentJobs" => 4,
+      "queueSlo" => nil,
+      "notes" => [
+        "Capacity is shared by all three profiles; a profile label does not reserve a private slot.",
+        "Four concurrent jobs are the current safe contract. Six was only a short load experiment."
+      ]
+    }
+    fail_with("canonical source capacity drift") unless capacity == expected
+    expected
+  end
+
+  def normalize_requirement_environment(environment)
+    fail_with("canonical source requirement environment drift") unless environment == REQUIREMENT_ENVIRONMENT
+    REQUIREMENT_ENVIRONMENT
   end
 
   def normalize_profile(source_profile)
     label = source_profile.fetch("label")
-    display_name = source_profile.fetch("displayName").sub(/\ALinux x64 /i, "").split.map(&:capitalize).join(" ")
-    normalized_class = source_profile.fetch("class").sub(/\Alinux-x64\z/, "standard").sub(/-x64\z/, "")
+    definition = PROFILE_DEFINITIONS.fetch(label) { fail_with("canonical source profile label drift") }
+    expected_source_identity = {
+      "id" => definition.fetch("sourceId"),
+      "class" => definition.fetch("sourceClass"),
+      "displayName" => definition.fetch("sourceDisplayName")
+    }
+    fail_with("canonical source profile identity drift") unless source_profile.slice(*expected_source_identity.keys) == expected_source_identity
     {
-      "id" => source_profile.fetch("id").sub(/\Alinux-x64-/, ""),
+      "id" => definition.fetch("id"),
       "label" => label,
-      "class" => normalized_class,
-      "displayName" => display_name,
+      "class" => definition.fetch("class"),
+      "displayName" => definition.fetch("displayName"),
       "status" => source_profile.fetch("status"),
       "minimumResources" => source_profile.fetch("minimumResources"),
       "capabilities" => { "guaranteed" => normalize_capabilities(source_profile.fetch("capabilities")) },
-      "workload" => normalize_workload(label),
+      "workload" => normalize_workload(source_profile.fetch("workload"), label),
       "deprecation" => source_profile.fetch("deprecation").transform_values { |value| value == "" ? nil : value }
     }
   end
@@ -242,22 +341,10 @@ class RunnerCatalogValidator
     result
   end
 
-  def normalize_workload(label)
-    fail_with("source profile label not allowlisted") unless PUBLIC_WORKLOADS.key?(label)
-    PUBLIC_WORKLOADS.fetch(label)
-  end
-
-  def contains_forbidden_detail?(value)
-    case value
-    when Hash
-      value.any? { |key, child| BANNED_PUBLIC_KEYS.include?(key) || contains_forbidden_detail?(key) || contains_forbidden_detail?(child) }
-    when Array
-      value.any? { |child| contains_forbidden_detail?(child) }
-    when String
-      value.match?(BANNED_PUBLIC_VALUE)
-    else
-      false
-    end
+  def normalize_workload(workload, label)
+    normalization = SOURCE_WORKLOAD_NORMALIZATIONS.fetch(label) { fail_with("source profile label not allowlisted") }
+    fail_with("canonical source workload drift") unless workload == normalization.fetch("source")
+    normalization.fetch("public")
   end
 
   def fail_with(message)
