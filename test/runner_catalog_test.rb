@@ -1,48 +1,124 @@
+require "digest"
+require "fileutils"
 require "json"
 require "minitest/autorun"
+require "open3"
+require "rbconfig"
+require "tmpdir"
 require "yaml"
 
 class RunnerCatalogTest < Minitest::Test
+  SCRIPT = File.expand_path("../script/validate_runner_catalog.rb", __dir__)
+  SOURCE_PATH = "clusters/agentos/runner-platform/profiles.yaml"
+
   def setup
-    @catalog = JSON.parse(File.read("runner-profiles.json"))
-    @yaml_catalog = YAML.safe_load(File.read("runner-profiles.yaml"), aliases: false)
-    @profiles = @catalog.fetch("profiles")
+    @root = File.expand_path("..", __dir__)
+    @catalog = JSON.parse(File.read(File.join(@root, "runner-profiles.json")))
   end
 
-  def test_machine_catalogs_are_the_same_contract
-    assert_equal @catalog, @yaml_catalog
-    assert_equal "akua-ci-catalog", @catalog.dig("metadata", "name")
+  def test_public_validator_accepts_current_contract
+    assert_validator_success(@root)
   end
 
-  def test_capabilities_are_compositional_for_docker_and_heavy
-    %w[akua-docker-ci-v2 akua-heavy-ci-v2].each do |label|
-      capabilities = profile(label).dig("capabilities", "guaranteed")
-      assert_includes capabilities, "ordinary build and test tooling"
-      assert_includes capabilities, "Docker"
+  def test_public_validator_rejects_stale_markdown
+    with_candidate do |candidate|
+      markdown_path = File.join(candidate, "RUNNERS.md")
+      markdown = File.read(markdown_path).sub("7168 MiB", "7169 MiB")
+      File.write(markdown_path, markdown)
+      assert_validator_failure(candidate, "README profile semantics drift")
     end
   end
 
-  def test_heavy_is_not_a_match_above_its_guaranteed_resources
-    refute safe_match?(profile("akua-heavy-ci-v2"), { "vcpu" => 5, "memoryMiB" => 7168, "usableDiskMiB" => 20480 }, ["Docker"])
-    assert_equal "external-runner-or-reduce-requirements", @catalog.dig("policy", "selection", "noMatch")
+  def test_public_validator_rejects_stale_manifest
+    with_candidate do |candidate|
+      manifest_path = File.join(candidate, "runner-catalog-manifest.json")
+      manifest = JSON.parse(File.read(manifest_path))
+      manifest.fetch("catalog").fetch("profiles").last.fetch("minimumResources")["vcpu"] = 5
+      File.write(manifest_path, JSON.pretty_generate(manifest) + "\n")
+      assert_validator_failure(candidate, "manifest catalog drift")
+    end
   end
 
-  def test_capacity_is_shared_and_exactly_four
-    assert_equal "organization", @catalog.dig("capacity", "scope")
-    assert_equal "shared", @catalog.dig("capacity", "allocation")
-    assert_equal 4, @catalog.dig("capacity", "maxConcurrentJobs")
+  def test_trusted_validator_rejects_fabricated_provenance
+    with_source_candidate do |candidate, source|
+      update_provenance(candidate, "a" * 64)
+      assert_validator_failure(candidate, "canonical source hash mismatch", source)
+    end
+  end
+
+  def test_trusted_validator_rejects_stale_source_semantics
+    with_source_candidate do |candidate, source|
+      source_file = File.join(source, SOURCE_PATH)
+      source_catalog = YAML.safe_load(File.read(source_file), aliases: false)
+      source_catalog.fetch("profiles").last.fetch("minimumResources")["vcpu"] = 5
+      File.write(source_file, YAML.dump(source_catalog))
+      update_provenance(candidate, Digest::SHA256.file(source_file).hexdigest)
+      assert_validator_failure(candidate, "canonical source normalization drift", source)
+    end
   end
 
   private
 
-  def profile(label)
-    @profiles.find { |candidate| candidate.fetch("label") == label }
+  def with_candidate
+    Dir.mktmpdir do |directory|
+      candidate = File.join(directory, "candidate")
+      FileUtils.cp_r(@root, candidate)
+      yield candidate
+    end
   end
 
-  def safe_match?(candidate, resources, capabilities)
-    guaranteed_resources = candidate.fetch("minimumResources")
-    guaranteed_capabilities = candidate.dig("capabilities", "guaranteed")
-    resources.all? { |key, value| value <= guaranteed_resources.fetch(key) } &&
-      capabilities.all? { |capability| guaranteed_capabilities.include?(capability) }
+  def with_source_candidate
+    with_candidate do |candidate|
+      source = File.join(candidate, "source")
+      source_file = File.join(source, SOURCE_PATH)
+      FileUtils.mkdir_p(File.dirname(source_file))
+      File.write(source_file, YAML.dump(source_fixture))
+      update_provenance(candidate, Digest::SHA256.file(source_file).hexdigest)
+      yield candidate, source
+    end
+  end
+
+  def source_fixture
+    source = Marshal.load(Marshal.dump(@catalog))
+    source.fetch("metadata").delete("name")
+    source.fetch("metadata").delete("documentation")
+    source.fetch("metadata").delete("provenance")
+    source.fetch("policy").delete("selection")
+    source.fetch("profiles").each do |profile|
+      profile["id"] = profile.fetch("id")
+      profile["class"] = profile.fetch("class")
+      profile["capabilities"] = profile.dig("capabilities", "guaranteed")
+    end
+    source
+  end
+
+  def update_provenance(candidate, sha256)
+    provenance = @catalog.fetch("metadata").fetch("provenance").merge("sha256" => sha256)
+    json_path = File.join(candidate, "runner-profiles.json")
+    json = JSON.parse(File.read(json_path))
+    json.fetch("metadata")["provenance"] = provenance
+    File.write(json_path, JSON.pretty_generate(json) + "\n")
+    File.write(File.join(candidate, "runner-profiles.yaml"), YAML.dump(json))
+    markdown_path = File.join(candidate, "RUNNERS.md")
+    markdown = File.read(markdown_path).sub(/sha256: [0-9a-f]+/, "sha256: #{sha256}")
+    File.write(markdown_path, markdown)
+    manifest_path = File.join(candidate, "runner-catalog-manifest.json")
+    manifest = JSON.parse(File.read(manifest_path))
+    manifest["source"] = provenance
+    manifest.fetch("catalog")["metadata"]["provenance"] = provenance
+    File.write(manifest_path, JSON.pretty_generate(manifest) + "\n")
+  end
+
+  def assert_validator_success(candidate)
+    stdout, stderr, status = Open3.capture3(RbConfig.ruby, SCRIPT, "--candidate-root", candidate)
+    assert status.success?, "#{stdout}\n#{stderr}"
+  end
+
+  def assert_validator_failure(candidate, message, source = nil)
+    args = [RbConfig.ruby, SCRIPT, "--candidate-root", candidate]
+    args.concat(["--source-root", source]) if source
+    stdout, stderr, status = Open3.capture3(*args)
+    refute status.success?, stdout
+    assert_includes stderr, message
   end
 end

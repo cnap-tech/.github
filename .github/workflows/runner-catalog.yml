@@ -4,15 +4,24 @@ on:
   pull_request:
     paths:
       - RUNNERS.md
+      - runner-catalog-manifest.json
       - runner-profiles.json
       - runner-profiles.yaml
+      - script/validate_runner_catalog.rb
+      - test/runner_catalog_test.rb
       - .github/workflows/runner-catalog.yml
+      - .github/workflows/runner-catalog-trusted.yml
   push:
     branches: [main]
     paths:
       - RUNNERS.md
+      - runner-catalog-manifest.json
       - runner-profiles.json
       - runner-profiles.yaml
+      - script/validate_runner_catalog.rb
+      - test/runner_catalog_test.rb
+      - .github/workflows/runner-catalog.yml
+      - .github/workflows/runner-catalog-trusted.yml
 
 permissions:
   contents: read
@@ -22,155 +31,5 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Resolve canonical source revision
-        id: catalog-provenance
-        shell: ruby {0}
-        run: |
-          require "json"
-
-          provenance = JSON.parse(File.read("runner-profiles.json")).fetch("metadata").fetch("provenance")
-          abort "missing source revision" unless provenance.fetch("revision", "").match?(/\A[0-9a-f]{40}\z/)
-          File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |output| output.puts("revision=#{provenance.fetch("revision")}") }
-      - name: Checkout canonical runner source
-        uses: actions/checkout@v6
-        with:
-          repository: akua-dev/gitops
-          ref: ${{ steps.catalog-provenance.outputs.revision }}
-          token: ${{ secrets.GITOPS_READ_TOKEN }}
-          path: .gitops-source
-          sparse-checkout: clusters/agentos/runner-platform/profiles.yaml
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-      - name: Validate generated formats and catalog semantics
-        shell: ruby {0}
-        run: |
-          require "json"
-          require "yaml"
-          require "digest"
-
-          json = JSON.parse(File.read("runner-profiles.json"))
-          yaml = YAML.safe_load(File.read("runner-profiles.yaml"), aliases: false)
-          abort "JSON and YAML catalogs differ" unless json == yaml
-
-          metadata = json.fetch("metadata")
-          abort "provider-neutral metadata drift" unless metadata.keys.sort == %w[contractVersion documentation name provenance]
-          abort "catalog name drift" unless metadata.fetch("name") == "akua-ci-catalog"
-
-          provenance = metadata.fetch("provenance")
-          expected_provenance = {
-            "repository" => "akua-dev/gitops",
-            "path" => "clusters/agentos/runner-platform/profiles.yaml"
-          }
-          abort "non-canonical provenance" unless provenance.slice(*expected_provenance.keys) == expected_provenance
-          abort "missing source revision" unless provenance.fetch("revision", "").match?(/\A[0-9a-f]{40}\z/)
-          abort "missing source SHA-256" unless provenance.fetch("sha256", "").match?(/\A[0-9a-f]{64}\z/)
-          source_path = ".gitops-source/clusters/agentos/runner-platform/profiles.yaml"
-          abort "canonical source missing" unless File.file?(source_path)
-          abort "canonical source hash mismatch" unless Digest::SHA256.file(source_path).hexdigest == provenance.fetch("sha256")
-
-          capacity = json.fetch("capacity")
-          expected_capacity = {
-            "scope" => "organization",
-            "allocation" => "shared",
-            "maxConcurrentJobs" => 4,
-            "queueSlo" => nil,
-            "notes" => [
-              "Capacity is shared by all three profiles; a profile label does not reserve a private slot.",
-              "Four concurrent jobs are the current safe contract. Six was only a short load experiment."
-            ]
-          }
-          abort "unsafe capacity contract" unless capacity == expected_capacity
-
-          expected_selection = {
-            "safeMatch" => {
-              "resources" => "required-at-most-guaranteed-minimum",
-              "capabilities" => "required-subset-of-guaranteed"
-            },
-            "order" => %w[akua-x64-ci-v2 akua-docker-ci-v2 akua-heavy-ci-v2],
-            "noMatch" => "external-runner-or-reduce-requirements"
-          }
-          policy = json.fetch("policy")
-          abort "selection policy drift" unless policy.keys.sort == %w[requirementEnvironment selection]
-          abort "selection policy drift" unless policy.fetch("selection") == expected_selection
-
-          expected_profiles = {
-            "akua-x64-ci-v2" => {
-              "id" => "standard-v2",
-              "class" => "standard",
-              "displayName" => "Standard",
-              "minimumResources" => { "vcpu" => 2, "memoryMiB" => 4096, "usableDiskMiB" => 10240 },
-              "guaranteed" => ["ordinary build and test tooling"]
-            },
-            "akua-docker-ci-v2" => {
-              "id" => "docker-v2",
-              "class" => "docker",
-              "displayName" => "Docker",
-              "minimumResources" => { "vcpu" => 4, "memoryMiB" => 6144, "usableDiskMiB" => 15360 },
-              "guaranteed" => ["Docker", "Buildx", "service containers", "privileged containers", "ordinary build and test tooling"]
-            },
-            "akua-heavy-ci-v2" => {
-              "id" => "heavy-v2",
-              "class" => "heavy",
-              "displayName" => "Heavy",
-              "minimumResources" => { "vcpu" => 4, "memoryMiB" => 7168, "usableDiskMiB" => 20480 },
-              "guaranteed" => ["Docker", "Buildx", "service containers", "privileged containers", "ordinary build and test tooling"]
-            }
-          }
-
-          profiles = json.fetch("profiles")
-          by_label = profiles.to_h { |profile| [profile.fetch("label"), profile] }
-          abort "stable labels drift" unless by_label.keys == expected_selection["order"]
-          expected_profiles.each do |label, expected|
-            profile = by_label.fetch(label)
-            abort "provider-specific profile fields" unless profile.keys.sort == %w[capabilities class deprecation displayName id label minimumResources status workload]
-            abort "profile identity drift" unless profile.slice("id", "class", "displayName") == expected.slice("id", "class", "displayName")
-            abort "resource guarantee drift" unless profile.fetch("minimumResources") == expected.fetch("minimumResources")
-            abort "capability guarantee drift" unless profile.dig("capabilities", "guaranteed") == expected.fetch("guaranteed")
-            abort "profile status drift" unless profile.fetch("status") == "active"
-            abort "profile deprecation drift" unless profile.fetch("deprecation") == {
-              "deprecated" => false,
-              "announcedAt" => nil,
-              "sunsetAt" => nil,
-              "replacementLabel" => nil
-            }
-          end
-
-          markdown = File.read("RUNNERS.md")
-          contract_match = markdown.match(/<!-- runner-catalog-contract\s*\n(.*?)\n-->/m)
-          abort "missing structured catalog contract" unless contract_match
-          markdown_contract = YAML.safe_load(contract_match.fetch(1), aliases: false)
-          abort "README contract version drift" unless markdown_contract.fetch("contractVersion") == metadata.fetch("contractVersion")
-          abort "README capacity drift" unless markdown_contract.fetch("capacity") == capacity
-          abort "README selection drift" unless markdown_contract.fetch("selection") == policy.fetch("selection")
-          abort "README provenance drift" unless markdown_contract.fetch("provenance") == provenance
-
-          header_index = markdown.lines.index { |line| line.start_with?("| Label | Profile |") }
-          abort "missing profile table" unless header_index
-          table_lines = markdown.lines[(header_index + 2)..].take_while { |line| line.start_with?("| `akua-") }
-          table = table_lines.map do |line|
-            cells = line.strip.split("|", -1)[1...-1].map(&:strip)
-            abort "malformed profile table" unless cells.length == 8
-            cpu = cells.fetch(2).match?(/\A\d+ vCPU\z/) && cells.fetch(2).to_i
-            memory = cells.fetch(3).match?(/\A\d+ MiB\z/) && cells.fetch(3).to_i
-            disk = cells.fetch(4).match?(/\A\d+ MiB\z/) && cells.fetch(4).to_i
-            abort "malformed profile resources" unless cpu && memory && disk
-            {
-              "label" => cells.fetch(0).delete("`"),
-              "displayName" => cells.fetch(1),
-              "minimumResources" => { "vcpu" => cpu, "memoryMiB" => memory, "usableDiskMiB" => disk },
-              "guaranteed" => cells.fetch(5).split(/,\s*/),
-              "status" => cells.fetch(6),
-              "deprecation" => cells.fetch(7)
-            }
-          end
-          expected_table = profiles.map do |profile|
-            {
-              "label" => profile.fetch("label"),
-              "displayName" => profile.fetch("displayName"),
-              "minimumResources" => profile.fetch("minimumResources"),
-              "guaranteed" => profile.dig("capabilities", "guaranteed"),
-              "status" => profile.fetch("status"),
-              "deprecation" => profile.dig("deprecation", "deprecated") ? "deprecated" : "not deprecated"
-            }
-          end
-          abort "README profile semantics drift" unless table == expected_table
+      - name: Validate public catalog contract
+        run: ruby script/validate_runner_catalog.rb

@@ -95,6 +95,10 @@ capacity:
   scope: organization
   allocation: shared
   maxConcurrentJobs: 4
+  queueSlo: null
+  notes:
+  - Capacity is shared by all three profiles; a profile label does not reserve a private slot.
+  - Four concurrent jobs are the current safe contract. Six was only a short load experiment.
 selection:
   safeMatch:
     resources: required-at-most-guaranteed-minimum
