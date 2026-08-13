@@ -115,7 +115,7 @@ jobs:
       - name: Verify trusted boundary
         run: ruby .trusted/script/check_runner_catalog_trust_boundary.rb --trusted-root .trusted --candidate-root .candidate
       - name: Exercise base-owned infrastructure
-        run: ruby .trusted/test/runner_catalog_test.rb && ruby .trusted/test/runner_catalog_lifecycle_test.rb && ruby .trusted/test/runner_catalog_trust_boundary_test.rb
+        run: cd .trusted && ruby test/runner_catalog_test.rb && ruby test/runner_catalog_lifecycle_test.rb && ruby test/runner_catalog_trust_boundary_test.rb
       - name: Check catalog lifecycle
         id: lifecycle
         run: echo "action=$(ruby .trusted/script/check_runner_catalog_lifecycle.rb --previous-root .trusted --current-root .candidate)" >> "$GITHUB_OUTPUT"
