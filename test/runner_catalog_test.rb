@@ -164,6 +164,17 @@ class RunnerCatalogTest < Minitest::Test
     end
   end
 
+  def test_trusted_validator_rejects_enabled_source_only_capability
+    with_source_candidate do |candidate, source|
+      source_file = File.join(source, SOURCE_PATH)
+      source_catalog = YAML.safe_load(File.read(source_file), aliases: false)
+      source_catalog.fetch("profiles").last.fetch("capabilities")["nestedVirtualization"] = true
+      File.write(source_file, YAML.dump(source_catalog))
+      update_source_hash(candidate, source_file)
+      assert_validator_failure(candidate, "source-only capability must remain disabled", source)
+    end
+  end
+
   def test_trusted_validator_rejects_missing_baseline_capability
     with_source_candidate do |candidate, source|
       source_file = File.join(source, SOURCE_PATH)
@@ -343,6 +354,7 @@ class RunnerCatalogTest < Minitest::Test
         "buildx" => profile.dig("capabilities", "guaranteed").include?("Buildx"),
         "serviceContainers" => profile.dig("capabilities", "guaranteed").include?("service containers"),
         "privilegedContainers" => profile.dig("capabilities", "guaranteed").include?("privileged containers"),
+        "nestedVirtualization" => false,
         "ordinaryBuildAndTestTooling" => true
       }
       profile.merge(
