@@ -15,7 +15,8 @@ class RunnerCatalogValidator
     "docker" => "Docker",
     "buildx" => "Buildx",
     "serviceContainers" => "service containers",
-    "privilegedContainers" => "privileged containers"
+    "privilegedContainers" => "privileged containers",
+    "ordinaryBuildAndTestTooling" => BASELINE_CAPABILITY
   }.freeze
   PUBLIC_CAPABILITIES = (CAPABILITY_NAMES.values + [BASELINE_CAPABILITY]).freeze
   PROFILE_DEFINITIONS = {
@@ -155,6 +156,7 @@ class RunnerCatalogValidator
     fail_with("manifest version drift") unless manifest.fetch("manifestVersion") == 1
     fail_with("manifest provenance drift") unless manifest.fetch("source") == json.dig("metadata", "provenance")
     fail_with("manifest catalog drift") unless manifest.fetch("catalog") == json
+    fail_with("catalog schema drift") unless json.keys.sort == %w[apiVersion capacity kind metadata policy profiles]
     json
   end
 
@@ -220,6 +222,7 @@ class RunnerCatalogValidator
     contract_match = markdown.match(/<!-- runner-catalog-contract\s*\n(.*?)\n-->/m)
     fail_with("missing structured catalog contract") unless contract_match
     markdown_contract = YAML.safe_load(contract_match[1], aliases: false)
+    fail_with("README contract schema drift") unless markdown_contract.keys.sort == %w[capacity contractVersion provenance selection]
     fail_with("README contract version drift") unless markdown_contract.fetch("contractVersion") == catalog.dig("metadata", "contractVersion")
     fail_with("README capacity drift") unless markdown_contract.fetch("capacity") == catalog.fetch("capacity")
     fail_with("README selection drift") unless markdown_contract.fetch("selection") == catalog.dig("policy", "selection")
@@ -331,10 +334,12 @@ class RunnerCatalogValidator
   end
 
   def normalize_capabilities(capabilities)
-    result = if capabilities.is_a?(Array)
-      capabilities.dup
-    else
-      CAPABILITY_NAMES.filter_map { |key, name| name if capabilities.fetch(key, false) }
+    fail_with("source capability schema drift") unless capabilities.is_a?(Hash)
+    fail_with("source capability schema drift") unless capabilities.keys.all? { |key| CAPABILITY_NAMES.key?(key) }
+    result = CAPABILITY_NAMES.each_with_object([]) do |(key, name), values|
+      value = capabilities.fetch(key, false)
+      fail_with("source capability schema drift") unless value == true || value == false
+      values << name if value
     end
     fail_with("source capability not allowlisted") unless result.all? { |capability| PUBLIC_CAPABILITIES.include?(capability) }
     fail_with("source missing baseline capability") unless result.include?(BASELINE_CAPABILITY)
