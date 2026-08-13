@@ -18,6 +18,7 @@ class RunnerCatalogValidator
     "privilegedContainers" => "privileged containers",
     "ordinaryBuildAndTestTooling" => BASELINE_CAPABILITY
   }.freeze
+  SOURCE_ONLY_FALSE_CAPABILITIES = %w[nestedVirtualization].freeze
   PUBLIC_CAPABILITIES = (CAPABILITY_NAMES.values + [BASELINE_CAPABILITY]).freeze
   PROFILE_DEFINITIONS = {
     "akua-x64-ci-v2" => {
@@ -385,7 +386,11 @@ class RunnerCatalogValidator
 
   def normalize_capabilities(capabilities)
     fail_with("source capability schema drift") unless capabilities.is_a?(Hash)
-    fail_with("source capability schema drift") unless capabilities.keys.all? { |key| CAPABILITY_NAMES.key?(key) }
+    allowed_source_keys = CAPABILITY_NAMES.keys + SOURCE_ONLY_FALSE_CAPABILITIES
+    fail_with("source capability schema drift") unless capabilities.keys.all? { |key| allowed_source_keys.include?(key) }
+    SOURCE_ONLY_FALSE_CAPABILITIES.each do |key|
+      fail_with("source-only capability must remain disabled") unless capabilities.fetch(key, false) == false
+    end
     result = CAPABILITY_NAMES.each_with_object([]) do |(key, name), values|
       value = capabilities.fetch(key, false)
       fail_with("source capability schema drift") unless value == true || value == false
