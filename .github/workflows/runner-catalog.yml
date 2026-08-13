@@ -22,11 +22,31 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+      - name: Resolve canonical source revision
+        id: catalog-provenance
+        shell: ruby {0}
+        run: |
+          require "json"
+
+          provenance = JSON.parse(File.read("runner-profiles.json")).fetch("metadata").fetch("provenance")
+          abort "missing source revision" unless provenance.fetch("revision", "").match?(/\A[0-9a-f]{40}\z/)
+          File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |output| output.puts("revision=#{provenance.fetch("revision")}") }
+      - name: Checkout canonical runner source
+        uses: actions/checkout@v6
+        with:
+          repository: akua-dev/gitops
+          ref: ${{ steps.catalog-provenance.outputs.revision }}
+          token: ${{ secrets.GITOPS_READ_TOKEN }}
+          path: .gitops-source
+          sparse-checkout: clusters/agentos/runner-platform/profiles.yaml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - name: Validate generated formats and catalog semantics
         shell: ruby {0}
         run: |
           require "json"
           require "yaml"
+          require "digest"
 
           json = JSON.parse(File.read("runner-profiles.json"))
           yaml = YAML.safe_load(File.read("runner-profiles.yaml"), aliases: false)
@@ -34,6 +54,7 @@ jobs:
 
           metadata = json.fetch("metadata")
           abort "provider-neutral metadata drift" unless metadata.keys.sort == %w[contractVersion documentation name provenance]
+          abort "catalog name drift" unless metadata.fetch("name") == "akua-ci-catalog"
 
           provenance = metadata.fetch("provenance")
           expected_provenance = {
@@ -43,9 +64,22 @@ jobs:
           abort "non-canonical provenance" unless provenance.slice(*expected_provenance.keys) == expected_provenance
           abort "missing source revision" unless provenance.fetch("revision", "").match?(/\A[0-9a-f]{40}\z/)
           abort "missing source SHA-256" unless provenance.fetch("sha256", "").match?(/\A[0-9a-f]{64}\z/)
+          source_path = ".gitops-source/clusters/agentos/runner-platform/profiles.yaml"
+          abort "canonical source missing" unless File.file?(source_path)
+          abort "canonical source hash mismatch" unless Digest::SHA256.file(source_path).hexdigest == provenance.fetch("sha256")
 
           capacity = json.fetch("capacity")
-          abort "unsafe capacity contract" unless capacity.fetch("maxConcurrentJobs") == 4
+          expected_capacity = {
+            "scope" => "organization",
+            "allocation" => "shared",
+            "maxConcurrentJobs" => 4,
+            "queueSlo" => nil,
+            "notes" => [
+              "Capacity is shared by all three profiles; a profile label does not reserve a private slot.",
+              "Four concurrent jobs are the current safe contract. Six was only a short load experiment."
+            ]
+          }
+          abort "unsafe capacity contract" unless capacity == expected_capacity
 
           expected_selection = {
             "safeMatch" => {
@@ -72,14 +106,14 @@ jobs:
               "class" => "docker",
               "displayName" => "Docker",
               "minimumResources" => { "vcpu" => 4, "memoryMiB" => 6144, "usableDiskMiB" => 15360 },
-              "guaranteed" => ["Docker", "Buildx", "service containers", "privileged containers"]
+              "guaranteed" => ["Docker", "Buildx", "service containers", "privileged containers", "ordinary build and test tooling"]
             },
             "akua-heavy-ci-v2" => {
               "id" => "heavy-v2",
               "class" => "heavy",
               "displayName" => "Heavy",
               "minimumResources" => { "vcpu" => 4, "memoryMiB" => 7168, "usableDiskMiB" => 20480 },
-              "guaranteed" => ["Docker", "Buildx", "service containers", "privileged containers"]
+              "guaranteed" => ["Docker", "Buildx", "service containers", "privileged containers", "ordinary build and test tooling"]
             }
           }
 
@@ -106,6 +140,7 @@ jobs:
           abort "missing structured catalog contract" unless contract_match
           markdown_contract = YAML.safe_load(contract_match.fetch(1), aliases: false)
           abort "README contract version drift" unless markdown_contract.fetch("contractVersion") == metadata.fetch("contractVersion")
+          abort "README capacity drift" unless markdown_contract.fetch("capacity") == capacity
           abort "README selection drift" unless markdown_contract.fetch("selection") == policy.fetch("selection")
           abort "README provenance drift" unless markdown_contract.fetch("provenance") == provenance
 

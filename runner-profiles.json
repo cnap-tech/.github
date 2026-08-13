@@ -2,7 +2,7 @@
   "apiVersion": "runners.akua.dev/v1alpha1",
   "kind": "RunnerProfileCatalog",
   "metadata": {
-    "name": "akua-linux-x64",
+    "name": "akua-ci-catalog",
     "contractVersion": "2.0.0",
     "documentation": "https://github.com/akua-dev/.github/blob/main/RUNNERS.md",
     "provenance": {
@@ -91,7 +91,8 @@
           "Docker",
           "Buildx",
           "service containers",
-          "privileged containers"
+          "privileged containers",
+          "ordinary build and test tooling"
         ]
       },
       "workload": {
@@ -126,7 +127,8 @@
           "Docker",
           "Buildx",
           "service containers",
-          "privileged containers"
+          "privileged containers",
+          "ordinary build and test tooling"
         ]
       },
       "workload": {

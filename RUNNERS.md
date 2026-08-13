@@ -7,8 +7,8 @@ implementation behind a label may change without requiring repository edits.
 | Label | Profile | Minimum CPU | Minimum memory | Minimum usable disk | Guaranteed capabilities | Status | Deprecation |
 | --- | --- | ---: | ---: | ---: | --- | --- | --- |
 | `akua-x64-ci-v2` | Standard | 2 vCPU | 4096 MiB | 10240 MiB | ordinary build and test tooling | active | not deprecated |
-| `akua-docker-ci-v2` | Docker | 4 vCPU | 6144 MiB | 15360 MiB | Docker, Buildx, service containers, privileged containers | active | not deprecated |
-| `akua-heavy-ci-v2` | Heavy | 4 vCPU | 7168 MiB | 20480 MiB | Docker, Buildx, service containers, privileged containers | active | not deprecated |
+| `akua-docker-ci-v2` | Docker | 4 vCPU | 6144 MiB | 15360 MiB | Docker, Buildx, service containers, privileged containers, ordinary build and test tooling | active | not deprecated |
+| `akua-heavy-ci-v2` | Heavy | 4 vCPU | 7168 MiB | 20480 MiB | Docker, Buildx, service containers, privileged containers, ordinary build and test tooling | active | not deprecated |
 
 Capacity is shared across these labels and currently capped at **4 concurrent
 jobs**. This is a safety limit, not a queue-start SLO or a reservation per
@@ -91,6 +91,10 @@ Machine-readable forms: [`runner-profiles.yaml`](runner-profiles.yaml) and
 
 <!-- runner-catalog-contract
 contractVersion: 2.0.0
+capacity:
+  scope: organization
+  allocation: shared
+  maxConcurrentJobs: 4
 selection:
   safeMatch:
     resources: required-at-most-guaranteed-minimum
