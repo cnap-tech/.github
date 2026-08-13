@@ -1,0 +1,50 @@
+name: Runner catalog validator bootstrap
+
+on:
+  pull_request:
+    paths:
+      - script/validate_runner_catalog.rb
+      - script/check_runner_catalog_lifecycle.rb
+      - script/check_runner_catalog_trust_boundary.rb
+      - test/runner_catalog_test.rb
+      - test/runner_catalog_lifecycle_test.rb
+      - test/runner_catalog_trust_boundary_test.rb
+      - .github/workflows/runner-catalog.yml
+      - .github/workflows/runner-catalog-trusted.yml
+      - RUNNERS.md
+      - runner-catalog-manifest.json
+      - runner-profiles.json
+      - runner-profiles.yaml
+  push:
+    branches: [main]
+    paths:
+      - script/validate_runner_catalog.rb
+      - script/check_runner_catalog_lifecycle.rb
+      - script/check_runner_catalog_trust_boundary.rb
+      - test/runner_catalog_test.rb
+      - test/runner_catalog_lifecycle_test.rb
+      - test/runner_catalog_trust_boundary_test.rb
+      - .github/workflows/runner-catalog.yml
+      - .github/workflows/runner-catalog-trusted.yml
+      - RUNNERS.md
+      - runner-catalog-manifest.json
+      - runner-profiles.json
+      - runner-profiles.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Exercise trusted validator contract
+        run: ruby test/runner_catalog_test.rb
+      - name: Exercise catalog lifecycle contract
+        run: ruby test/runner_catalog_lifecycle_test.rb
+      - name: Exercise trust boundary contract
+        run: ruby test/runner_catalog_trust_boundary_test.rb
+      - name: Validate published catalog when present
+        if: hashFiles('runner-profiles.json') != ''
+        run: ruby script/validate_runner_catalog.rb
