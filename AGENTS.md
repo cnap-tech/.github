@@ -3,6 +3,14 @@
 This repository maintains the public GitHub organization profile for `akua-dev`.
 The rendered profile content lives in `profile/README.md`.
 
+## Runner profile contract
+
+Use `RUNNERS.md` to select stable GitHub Actions labels. Agents should express
+required capabilities and resources, never ARC, Firecracker, Kata, Kubernetes,
+cloud-provider or node implementation details. `runner-profiles.yaml` and
+`runner-profiles.json` are generated from `akua-dev/gitops`; do not edit them or
+`RUNNERS.md` directly.
+
 ## Profile README guidance
 
 - Keep `profile/README.md` closely aligned with a shorter version of the

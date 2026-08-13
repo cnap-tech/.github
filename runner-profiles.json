@@ -1,0 +1,171 @@
+{
+  "apiVersion": "runners.akua.dev/v1alpha1",
+  "kind": "RunnerProfileCatalog",
+  "metadata": {
+    "name": "akua-linux-x64",
+    "contractVersion": "2.0.0",
+    "imageContractVersion": "ubuntu-24.04-v1",
+    "documentation": "https://github.com/akua-dev/.github/blob/main/RUNNERS.md",
+    "provenance": {
+      "repository": "akua-dev/gitops",
+      "path": "clusters/agentos/runner-platform/profiles.yaml",
+      "revision": "ca39219715c3b6723452d8be79689e73470b5810",
+      "sha256": "5d3c88e7fa34d77209463bd39bcbad592a7d2feda751199add358d5f109bc598"
+    }
+  },
+  "capacity": {
+    "scope": "organization",
+    "allocation": "shared",
+    "maxConcurrentJobs": 4,
+    "queueSlo": null,
+    "notes": [
+      "Capacity is shared by all three profiles; a profile label does not reserve a private slot.",
+      "Four concurrent jobs are the current safe contract. Six was only a short load experiment."
+    ]
+  },
+  "policy": {
+    "requirementEnvironment": {
+      "cpu": "AKUA_CI_REQUIRED_VCPU",
+      "memoryMiB": "AKUA_CI_REQUIRED_MEMORY_MIB",
+      "diskMiB": "AKUA_CI_REQUIRED_DISK_MIB"
+    },
+    "runtimeSpecificLabelPatterns": [
+      "arc",
+      "fireactions",
+      "firecracker",
+      "hetzner",
+      "kata",
+      "kubernetes"
+    ],
+    "allowedExternalLabelPatterns": [
+      "^ubuntu-[A-Za-z0-9._-]+$",
+      "^windows-[A-Za-z0-9._-]+$",
+      "^macos-[A-Za-z0-9._-]+$"
+    ]
+  },
+  "profiles": [
+    {
+      "id": "linux-x64-standard-v2",
+      "label": "akua-x64-ci-v2",
+      "class": "linux-x64",
+      "displayName": "Linux x64 standard",
+      "status": "active",
+      "platform": {
+        "os": "linux",
+        "distribution": "ubuntu",
+        "distributionVersion": "24.04",
+        "architecture": "x86_64"
+      },
+      "minimumResources": {
+        "vcpu": 2,
+        "memoryMiB": 4096,
+        "usableDiskMiB": 10240
+      },
+      "capabilities": {
+        "docker": false,
+        "buildx": false,
+        "serviceContainers": false,
+        "privilegedContainers": false,
+        "nestedVirtualization": false
+      },
+      "workload": {
+        "recommended": [
+          "linting, formatting, unit tests and ordinary compilation",
+          "jobs that do not start containers or require large local caches"
+        ],
+        "exclusions": [
+          "Docker, Buildx and GitHub Actions service containers",
+          "nested virtualization, KVM and architecture-specific non-x64 builds"
+        ]
+      },
+      "deprecation": {
+        "deprecated": false,
+        "announcedAt": null,
+        "sunsetAt": null,
+        "replacementLabel": null
+      }
+    },
+    {
+      "id": "linux-x64-docker-v2",
+      "label": "akua-docker-ci-v2",
+      "class": "docker-x64",
+      "displayName": "Linux x64 Docker",
+      "status": "active",
+      "platform": {
+        "os": "linux",
+        "distribution": "ubuntu",
+        "distributionVersion": "24.04",
+        "architecture": "x86_64"
+      },
+      "minimumResources": {
+        "vcpu": 4,
+        "memoryMiB": 6144,
+        "usableDiskMiB": 15360
+      },
+      "capabilities": {
+        "docker": true,
+        "buildx": true,
+        "serviceContainers": true,
+        "privilegedContainers": true,
+        "nestedVirtualization": false
+      },
+      "workload": {
+        "recommended": [
+          "Docker and Buildx image builds",
+          "integration tests using Docker or GitHub Actions service containers"
+        ],
+        "exclusions": [
+          "nested virtualization, KVM and architecture-specific non-x64 builds",
+          "workloads declaring resources above this profile; use the heavy profile"
+        ]
+      },
+      "deprecation": {
+        "deprecated": false,
+        "announcedAt": null,
+        "sunsetAt": null,
+        "replacementLabel": null
+      }
+    },
+    {
+      "id": "linux-x64-heavy-v2",
+      "label": "akua-heavy-ci-v2",
+      "class": "heavy-x64",
+      "displayName": "Linux x64 heavy",
+      "status": "active",
+      "platform": {
+        "os": "linux",
+        "distribution": "ubuntu",
+        "distributionVersion": "24.04",
+        "architecture": "x86_64"
+      },
+      "minimumResources": {
+        "vcpu": 4,
+        "memoryMiB": 7168,
+        "usableDiskMiB": 20480
+      },
+      "capabilities": {
+        "docker": true,
+        "buildx": true,
+        "serviceContainers": true,
+        "privilegedContainers": true,
+        "nestedVirtualization": false
+      },
+      "workload": {
+        "recommended": [
+          "memory-heavy compilation, packaging and browser or integration suites",
+          "Docker jobs whose declared requirements exceed the Docker profile"
+        ],
+        "exclusions": [
+          "nested virtualization, KVM and architecture-specific non-x64 builds",
+          "workloads requiring more than the stated minimum resource contract"
+        ]
+      },
+      "deprecation": {
+        "deprecated": false,
+        "announcedAt": null,
+        "sunsetAt": null,
+        "replacementLabel": null
+      }
+    }
+  ]
+}

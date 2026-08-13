@@ -1,0 +1,45 @@
+name: Runner catalog publication
+
+on:
+  pull_request:
+    paths:
+      - RUNNERS.md
+      - runner-profiles.json
+      - runner-profiles.yaml
+      - .github/workflows/runner-catalog.yml
+  push:
+    branches: [main]
+    paths:
+      - RUNNERS.md
+      - runner-profiles.json
+      - runner-profiles.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate generated formats and provenance
+        shell: ruby {0}
+        run: |
+          require "json"
+          require "yaml"
+
+          json = JSON.parse(File.read("runner-profiles.json"))
+          yaml = YAML.safe_load(File.read("runner-profiles.yaml"), aliases: false)
+          abort "JSON and YAML catalogs differ" unless json == yaml
+
+          provenance = json.dig("metadata", "provenance") || {}
+          abort "missing source revision" unless provenance.fetch("revision", "").match?(/\A[0-9a-f]{40}\z/)
+          abort "missing source SHA-256" unless provenance.fetch("sha256", "").match?(/\A[0-9a-f]{64}\z/)
+          abort "unsafe capacity contract" unless json.dig("capacity", "maxConcurrentJobs").to_i.between?(1, 4)
+
+          labels = json.fetch("profiles").map { |profile| profile.fetch("label") }
+          expected = %w[akua-x64-ci-v2 akua-docker-ci-v2 akua-heavy-ci-v2]
+          abort "stable labels missing" unless (expected - labels).empty?
+
+          runners = File.read("RUNNERS.md")
+          abort "README provenance drift" unless runners.include?(provenance.fetch("revision")) && runners.include?(provenance.fetch("sha256"))
