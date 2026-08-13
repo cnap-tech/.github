@@ -69,7 +69,7 @@ class RunnerCatalogTrustBoundary
       "uses" => step.fetch("uses", nil),
       "run" => step.fetch("run", nil),
       "if" => step.fetch("if", nil),
-      "with" => step.fetch("with", {}).slice("ref", "path", "repository", "token", "persist-credentials", "sparse-checkout", "sparse-checkout-cone-mode")
+      "with" => step.fetch("with", {}).slice("ref", "path", "repository", "token", "ssh-key", "persist-credentials", "sparse-checkout", "sparse-checkout-cone-mode")
     }
   end
 
@@ -89,6 +89,8 @@ class RunnerCatalogTrustBoundary
     fail_with("trusted workflow boundary ordering drift") unless boundary_index < source_index && tests_index < source_index
     fail_with("trusted boundary must use base-owned files") unless steps.fetch(boundary_index).fetch("run") == "ruby .trusted/script/check_runner_catalog_trust_boundary.rb --trusted-root .trusted --candidate-root .candidate"
     fail_with("base-owned tests must run from trusted root") unless steps.fetch(tests_index).fetch("run") == "cd .trusted && ruby test/runner_catalog_test.rb && ruby test/runner_catalog_lifecycle_test.rb && ruby test/runner_catalog_trust_boundary_test.rb"
+    source_auth = steps.fetch(source_index).fetch("with", {})
+    fail_with("trusted source must use the read-only deploy key") unless source_auth.fetch("ssh-key", nil) == "${{ secrets.GITOPS_READ_SSH_KEY }}" && !source_auth.key?("token")
   end
 
   def fail_with(message)

@@ -86,7 +86,7 @@ jobs:
         with:
           repository: akua-dev/gitops
           ref: ${{ steps.catalog-provenance.outputs.revision }}
-          token: ${{ secrets.GITOPS_READ_TOKEN }}
+          ssh-key: ${{ secrets.GITOPS_READ_SSH_KEY }}
           path: .gitops-source
           sparse-checkout: clusters/agentos/runner-platform/profiles.yaml
           sparse-checkout-cone-mode: false
@@ -136,7 +136,7 @@ jobs:
         with:
           repository: akua-dev/gitops
           ref: ${{ steps.catalog-provenance.outputs.revision }}
-          token: ${{ secrets.GITOPS_READ_TOKEN }}
+          ssh-key: ${{ secrets.GITOPS_READ_SSH_KEY }}
           path: .gitops-source
           sparse-checkout: clusters/agentos/runner-platform/profiles.yaml
           sparse-checkout-cone-mode: false

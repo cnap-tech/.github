@@ -82,7 +82,7 @@ class RunnerCatalogTrustBoundaryTest < Minitest::Test
           "steps" => [
             { "name" => "Verify trusted boundary", "run" => "ruby .trusted/script/check_runner_catalog_trust_boundary.rb --trusted-root .trusted --candidate-root .candidate" },
             { "name" => "Exercise base-owned infrastructure", "run" => "cd .trusted && ruby test/runner_catalog_test.rb && ruby test/runner_catalog_lifecycle_test.rb && ruby test/runner_catalog_trust_boundary_test.rb" },
-            { "name" => "Checkout canonical runner source", "uses" => "actions/checkout@v6", "with" => { "repository" => "akua-dev/gitops", "token" => "${{ secrets.GITOPS_READ_TOKEN }}" } }
+            { "name" => "Checkout canonical runner source", "uses" => "actions/checkout@v6", "with" => { "repository" => "akua-dev/gitops", "ssh-key" => "${{ secrets.GITOPS_READ_SSH_KEY }}" } }
           ]
         }
       }
