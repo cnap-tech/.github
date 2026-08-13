@@ -88,7 +88,7 @@ class RunnerCatalogTest < Minitest::Test
   def test_public_validator_rejects_stale_markdown
     with_candidate do |candidate|
       path = File.join(candidate, "RUNNERS.md")
-      File.write(path, File.read(path).sub("7168 MiB", "7169 MiB"))
+      File.write(path, File.read(path).sub("| `akua-heavy-ci-v2` | Heavy | 4 vCPU | 7168 MiB", "| `akua-heavy-ci-v2` | Heavy | 4 vCPU | 7169 MiB"))
       assert_validator_failure(candidate, "README profile semantics drift")
     end
   end
@@ -98,6 +98,14 @@ class RunnerCatalogTest < Minitest::Test
       path = File.join(candidate, "RUNNERS.md")
       File.write(path, File.read(path).sub("contractVersion: 2.0.0\n", "contractVersion: 2.0.0\nprovider: example\n"))
       assert_validator_failure(candidate, "README contract schema drift")
+    end
+  end
+
+  def test_public_validator_rejects_unmodeled_markdown_prose
+    with_candidate do |candidate|
+      path = File.join(candidate, "RUNNERS.md")
+      File.open(path, "a") { |file| file.puts("\nProvider-backed execution details") }
+      assert_validator_failure(candidate, "README document semantics drift")
     end
   end
 
@@ -184,6 +192,21 @@ class RunnerCatalogTest < Minitest::Test
     end
   end
 
+  def test_trusted_validator_derives_heavy_markdown_bound_from_source_resources
+    with_source_candidate do |candidate, source|
+      source_file = File.join(source, SOURCE_PATH)
+      source_catalog = YAML.safe_load(File.read(source_file), aliases: false)
+      source_catalog.fetch("profiles").last.fetch("minimumResources")["vcpu"] = 5
+      File.write(source_file, YAML.dump(source_catalog))
+      catalog = read_catalog(candidate)
+      catalog.fetch("profiles").last.fetch("minimumResources")["vcpu"] = 5
+      catalog.fetch("profiles").last["workload"] = public_workload("akua-heavy-ci-v2", catalog.fetch("profiles").last.fetch("minimumResources"))
+      write_candidate(candidate, catalog)
+      update_source_hash(candidate, source_file)
+      assert_validator_success(candidate, source)
+    end
+  end
+
   private
 
   def with_candidate
@@ -246,13 +269,13 @@ class RunnerCatalogTest < Minitest::Test
         "status" => "active",
         "minimumResources" => resources,
         "capabilities" => { "guaranteed" => capabilities },
-        "workload" => public_workload(label),
+        "workload" => public_workload(label, resources),
         "deprecation" => { "deprecated" => false, "announcedAt" => nil, "sunsetAt" => nil, "replacementLabel" => nil }
       }
     end
   end
 
-  def public_workload(label)
+  def public_workload(label, resources)
     {
       "akua-x64-ci-v2" => {
         "recommended" => [
@@ -279,7 +302,12 @@ class RunnerCatalogTest < Minitest::Test
           "Docker jobs whose declared requirements exceed Docker but fit Heavy"
         ],
         "exclusions" => [
-          "workloads requiring more than 4 vCPU, 7168 MiB memory or 20480 MiB usable disk; use an external runner or reduce requirements"
+          format(
+            "workloads requiring more than %<vcpu>d vCPU, %<memoryMiB>d MiB memory or %<usableDiskMiB>d MiB usable disk; use an external runner or reduce requirements",
+            vcpu: resources.fetch("vcpu"),
+            memoryMiB: resources.fetch("memoryMiB"),
+            usableDiskMiB: resources.fetch("usableDiskMiB")
+          )
         ]
       }
     }.fetch(label)
@@ -334,8 +362,41 @@ class RunnerCatalogTest < Minitest::Test
       "provenance" => catalog.dig("metadata", "provenance")
     }
     contract_yaml = YAML.dump(contract).sub("---\n", "").lines.map { |line| "      #{line}" }.join
+    heavy = catalog.fetch("profiles").find { |profile| profile.fetch("label") == "akua-heavy-ci-v2" }
+    heavy_resources = heavy.fetch("minimumResources")
+    profile_text = catalog.fetch("profiles").map do |profile|
+      workload = profile.fetch("workload")
+      [
+        "## `#{profile.fetch("label")}`",
+        "Recommended uses:",
+        *workload.fetch("recommended").map { |item| "- #{item}" },
+        "Exclusions:",
+        *workload.fetch("exclusions").map { |item| "- #{item}" }
+      ]
+    end.flatten.join("\n")
     <<~MARKDOWN
       # Akua GitHub Actions runner profiles
+
+      This provider-neutral catalog defines the stable runner labels and their conservative guarantees.
+      Workflows select a label by declared resources and capabilities; the implementation behind a label may change without repository edits.
+      Capacity is shared across all profiles and capped at #{catalog.dig("capacity", "maxConcurrentJobs")} concurrent jobs. A label does not reserve a private slot.
+
+      ## Selection rules
+
+      1. Select the first profile whose guaranteed resources meet the declared requirements and whose capabilities contain every required capability.
+      2. Use the stable label in workflow configuration; do not infer implementation details from the label.
+      3. Use `akua-heavy-ci-v2` only when requirements exceed Docker but fit Heavy: #{heavy_resources.fetch("vcpu")} vCPU, #{heavy_resources.fetch("memoryMiB")} MiB memory and #{heavy_resources.fetch("usableDiskMiB")} MiB usable disk.
+      Requirements above Heavy, or capabilities absent from every profile, require an external runner or reduced requirements.
+      Required-resource inputs are supplied through AKUA_CI_REQUIRED_VCPU, AKUA_CI_REQUIRED_MEMORY_MIB and AKUA_CI_REQUIRED_DISK_MIB.
+
+      ## Profile guarantees
+
+      #{profile_text}
+
+      ## Versioning and deprecation
+
+      The public contract version is #{catalog.dig("metadata", "contractVersion")}. Profiles are active and not deprecated unless the structured catalog says otherwise.
+      The machine-readable catalogs and provenance manifest are the canonical serialized projections of this document.
 
       | Label | Profile | Minimum CPU | Minimum memory | Minimum usable disk | Guaranteed capabilities | Status | Deprecation |
       | --- | --- | ---: | ---: | ---: | --- | --- | --- |
@@ -358,8 +419,10 @@ class RunnerCatalogTest < Minitest::Test
     write_candidate(candidate, catalog)
   end
 
-  def assert_validator_success(candidate)
-    stdout, stderr, status = Open3.capture3(RbConfig.ruby, SCRIPT, "--candidate-root", candidate)
+  def assert_validator_success(candidate, source = nil)
+    args = [RbConfig.ruby, SCRIPT, "--candidate-root", candidate]
+    args.concat(["--source-root", source]) if source
+    stdout, stderr, status = Open3.capture3(*args)
     assert status.success?, "#{stdout}\n#{stderr}"
   end
 

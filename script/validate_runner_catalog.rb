@@ -106,7 +106,7 @@ class RunnerCatalogValidator
           "Docker jobs whose declared requirements exceed Docker but fit Heavy"
         ],
         "exclusions" => [
-          "workloads requiring more than 4 vCPU, 7168 MiB memory or 20480 MiB usable disk; use an external runner or reduce requirements"
+          "workloads requiring more than %{vcpu} vCPU, %{memoryMiB} MiB memory or %{usableDiskMiB} MiB usable disk; use an external runner or reduce requirements"
         ]
       }
     }
@@ -206,7 +206,7 @@ class RunnerCatalogValidator
       fail_with("public capability schema drift") unless capabilities.keys == ["guaranteed"]
       fail_with("public capability vocabulary drift") unless capabilities.fetch("guaranteed").all? { |capability| PUBLIC_CAPABILITIES.include?(capability) }
       fail_with("missing baseline capability") unless profile.dig("capabilities", "guaranteed").include?(BASELINE_CAPABILITY)
-      fail_with("public workload semantics drift") unless profile.fetch("workload") == SOURCE_WORKLOAD_NORMALIZATIONS.fetch(profile.fetch("label")).fetch("public")
+      fail_with("public workload semantics drift") unless profile.fetch("workload") == public_workload_for(profile.fetch("label"), profile.fetch("minimumResources"))
       fail_with("profile status drift") unless profile.fetch("status") == "active"
       fail_with("profile deprecation drift") unless profile.fetch("deprecation") == {
         "deprecated" => false,
@@ -228,9 +228,12 @@ class RunnerCatalogValidator
     fail_with("README selection drift") unless markdown_contract.fetch("selection") == catalog.dig("policy", "selection")
     fail_with("README provenance drift") unless markdown_contract.fetch("provenance") == catalog.dig("metadata", "provenance")
 
-    header_index = markdown.lines.index { |line| line.start_with?("| Label | Profile |") }
+    lines = markdown.lines.map(&:chomp)
+    contract_matches = markdown.to_enum(:scan, /<!-- runner-catalog-contract\s*\n(.*?)\n-->/m).map { Regexp.last_match }
+    fail_with("README contract multiplicity drift") unless contract_matches.length == 1
+    header_index = lines.index { |line| line.start_with?("| Label | Profile |") }
     fail_with("missing profile table") unless header_index
-    table_lines = markdown.lines[(header_index + 2)..].take_while { |line| line.start_with?("| `akua-") }
+    table_lines = lines[(header_index + 2)..].take_while { |line| line.start_with?("| `akua-") }
     table = table_lines.map do |line|
       cells = line.strip.split("|", -1)[1...-1].map(&:strip)
       fail_with("malformed profile table") unless cells.length == 8
@@ -258,6 +261,47 @@ class RunnerCatalogValidator
       }
     end
     fail_with("README profile semantics drift") unless table == expected_table
+    fail_with("README document semantics drift") unless markdown_text_model(lines, header_index, table_lines, contract_matches.fetch(0)) == expected_markdown_text_model(catalog)
+  end
+
+  def markdown_text_model(lines, header_index, table_lines, contract_match)
+    contract_start = lines.index { |line| line == "<!-- runner-catalog-contract" }
+    contract_end = lines.index { |line| line == "-->" }
+    table_end = header_index + 2 + table_lines.length
+    ignored = (contract_start..contract_end).to_a + (header_index...table_end).to_a
+    lines.each_with_index.reject { |_line, index| ignored.include?(index) }.map(&:first).reject(&:empty?)
+  end
+
+  def expected_markdown_text_model(catalog)
+    heavy = catalog.fetch("profiles").find { |profile| profile.fetch("label") == "akua-heavy-ci-v2" }
+    heavy_resources = heavy.fetch("minimumResources")
+    lines = [
+      "# Akua GitHub Actions runner profiles",
+      "This provider-neutral catalog defines the stable runner labels and their conservative guarantees.",
+      "Workflows select a label by declared resources and capabilities; the implementation behind a label may change without repository edits.",
+      "Capacity is shared across all profiles and capped at #{catalog.dig("capacity", "maxConcurrentJobs")} concurrent jobs. A label does not reserve a private slot.",
+      "## Selection rules",
+      "1. Select the first profile whose guaranteed resources meet the declared requirements and whose capabilities contain every required capability.",
+      "2. Use the stable label in workflow configuration; do not infer implementation details from the label.",
+      "3. Use `akua-heavy-ci-v2` only when requirements exceed Docker but fit Heavy: #{heavy_resources.fetch("vcpu")} vCPU, #{heavy_resources.fetch("memoryMiB")} MiB memory and #{heavy_resources.fetch("usableDiskMiB")} MiB usable disk.",
+      "Requirements above Heavy, or capabilities absent from every profile, require an external runner or reduced requirements.",
+      "Required-resource inputs are supplied through AKUA_CI_REQUIRED_VCPU, AKUA_CI_REQUIRED_MEMORY_MIB and AKUA_CI_REQUIRED_DISK_MIB.",
+      "## Profile guarantees"
+    ]
+    catalog.fetch("profiles").each do |profile|
+      workload = profile.fetch("workload")
+      lines << "## `#{profile.fetch("label")}`"
+      lines << "Recommended uses:"
+      lines.concat(workload.fetch("recommended").map { |item| "- #{item}" })
+      lines << "Exclusions:"
+      lines.concat(workload.fetch("exclusions").map { |item| "- #{item}" })
+    end
+    lines.concat([
+      "## Versioning and deprecation",
+      "The public contract version is #{catalog.dig("metadata", "contractVersion")}. Profiles are active and not deprecated unless the structured catalog says otherwise.",
+      "The machine-readable catalogs and provenance manifest are the canonical serialized projections of this document."
+    ])
+    lines
   end
 
   def validate_source!(catalog)
@@ -320,15 +364,18 @@ class RunnerCatalogValidator
       "displayName" => definition.fetch("sourceDisplayName")
     }
     fail_with("canonical source profile identity drift") unless source_profile.slice(*expected_source_identity.keys) == expected_source_identity
+    resources = source_profile.fetch("minimumResources")
+    fail_with("canonical source resource schema drift") unless resources.is_a?(Hash) && resources.keys.sort == %w[memoryMiB usableDiskMiB vcpu]
+    fail_with("canonical source resource schema drift") unless resources.values.all? { |value| value.is_a?(Integer) && value.positive? }
     {
       "id" => definition.fetch("id"),
       "label" => label,
       "class" => definition.fetch("class"),
       "displayName" => definition.fetch("displayName"),
       "status" => source_profile.fetch("status"),
-      "minimumResources" => source_profile.fetch("minimumResources"),
+      "minimumResources" => resources,
       "capabilities" => { "guaranteed" => normalize_capabilities(source_profile.fetch("capabilities")) },
-      "workload" => normalize_workload(source_profile.fetch("workload"), label),
+      "workload" => normalize_workload(source_profile.fetch("workload"), label, resources),
       "deprecation" => source_profile.fetch("deprecation").transform_values { |value| value == "" ? nil : value }
     }
   end
@@ -346,10 +393,28 @@ class RunnerCatalogValidator
     result
   end
 
-  def normalize_workload(workload, label)
+  def normalize_workload(workload, label, resources)
     normalization = SOURCE_WORKLOAD_NORMALIZATIONS.fetch(label) { fail_with("source profile label not allowlisted") }
     fail_with("canonical source workload drift") unless workload == normalization.fetch("source")
-    normalization.fetch("public")
+    public_workload_for(label, resources)
+  end
+
+  def public_workload_for(label, resources)
+    normalization = SOURCE_WORKLOAD_NORMALIZATIONS.fetch(label) { fail_with("source profile label not allowlisted") }
+    public_workload = normalization.fetch("public").each_with_object({}) do |(key, values), copy|
+      copy[key] = values.dup
+    end
+    return public_workload unless label == "akua-heavy-ci-v2"
+
+    public_workload["exclusions"] = public_workload.fetch("exclusions").map do |exclusion|
+      format(
+        exclusion,
+        vcpu: resources.fetch("vcpu"),
+        memoryMiB: resources.fetch("memoryMiB"),
+        usableDiskMiB: resources.fetch("usableDiskMiB")
+      )
+    end
+    public_workload
   end
 
   def fail_with(message)
