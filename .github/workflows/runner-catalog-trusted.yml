@@ -8,12 +8,18 @@ on:
       - runner-profiles.json
       - runner-profiles.yaml
       - script/validate_runner_catalog.rb
+      - .github/workflows/runner-catalog.yml
       - .github/workflows/runner-catalog-trusted.yml
   push:
     branches: [main]
     paths:
+      - RUNNERS.md
+      - runner-catalog-manifest.json
+      - runner-profiles.json
+      - runner-profiles.yaml
       - script/validate_runner_catalog.rb
       - test/runner_catalog_test.rb
+      - .github/workflows/runner-catalog.yml
       - .github/workflows/runner-catalog-trusted.yml
 
 permissions:
@@ -27,6 +33,46 @@ jobs:
       - uses: actions/checkout@v6
       - name: Exercise trusted validator contract
         run: ruby test/runner_catalog_test.rb
+
+  verify-published:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Detect published catalog
+        id: publication
+        shell: bash
+        run: |
+          if [[ -e RUNNERS.md || -e runner-catalog-manifest.json || -e runner-profiles.json || -e runner-profiles.yaml ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Resolve canonical source revision
+        if: steps.publication.outputs.present == 'true'
+        id: catalog-provenance
+        shell: ruby {0}
+        run: |
+          require "json"
+
+          catalog = JSON.parse(File.read("runner-profiles.json"))
+          provenance = catalog.fetch("metadata").fetch("provenance")
+          abort "missing source revision" unless provenance.fetch("revision", "").match?(/\A[0-9a-f]{40}\z/)
+          File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |output| output.puts("revision=#{provenance.fetch("revision")}") }
+      - name: Checkout canonical runner source
+        if: steps.publication.outputs.present == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: akua-dev/gitops
+          ref: ${{ steps.catalog-provenance.outputs.revision }}
+          token: ${{ secrets.GITOPS_READ_TOKEN }}
+          path: .gitops-source
+          sparse-checkout: clusters/agentos/runner-platform/profiles.yaml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Validate generated catalog against canonical source
+        if: steps.publication.outputs.present == 'true'
+        run: ruby script/validate_runner_catalog.rb --candidate-root . --source-root .gitops-source
 
   verify:
     if: github.event_name == 'pull_request_target'

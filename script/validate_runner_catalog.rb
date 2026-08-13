@@ -129,6 +129,8 @@ class RunnerCatalogValidator
     "memoryMiB" => "AKUA_CI_REQUIRED_MEMORY_MIB",
     "diskMiB" => "AKUA_CI_REQUIRED_DISK_MIB"
   }.freeze
+  MARKDOWN_TABLE_HEADER = "| Label | Profile | Minimum CPU | Minimum memory | Minimum usable disk | Guaranteed capabilities | Status | Deprecation |".freeze
+  MARKDOWN_TABLE_SEPARATOR = "| --- | --- | ---: | ---: | ---: | --- | --- | --- |".freeze
 
   def initialize(candidate_root:, source_root: nil)
     @candidate_root = File.expand_path(candidate_root)
@@ -233,6 +235,7 @@ class RunnerCatalogValidator
     fail_with("README contract multiplicity drift") unless contract_matches.length == 1
     header_index = lines.index { |line| line.start_with?("| Label | Profile |") }
     fail_with("missing profile table") unless header_index
+    fail_with("README table schema drift") unless lines.fetch(header_index) == MARKDOWN_TABLE_HEADER && lines.fetch(header_index + 1) == MARKDOWN_TABLE_SEPARATOR
     table_lines = lines[(header_index + 2)..].take_while { |line| line.start_with?("| `akua-") }
     table = table_lines.map do |line|
       cells = line.strip.split("|", -1)[1...-1].map(&:strip)

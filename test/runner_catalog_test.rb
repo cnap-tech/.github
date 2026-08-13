@@ -101,6 +101,22 @@ class RunnerCatalogTest < Minitest::Test
     end
   end
 
+  def test_public_validator_rejects_markdown_table_header_drift
+    with_candidate do |candidate|
+      path = File.join(candidate, "RUNNERS.md")
+      File.write(path, File.read(path).sub("| Label | Profile | Minimum CPU |", "| Label | Profile | Backend |"))
+      assert_validator_failure(candidate, "README table schema drift")
+    end
+  end
+
+  def test_public_validator_rejects_markdown_table_separator_drift
+    with_candidate do |candidate|
+      path = File.join(candidate, "RUNNERS.md")
+      File.write(path, File.read(path).sub("| --- | --- | ---: |", "| --- | --- | --- |"))
+      assert_validator_failure(candidate, "README table schema drift")
+    end
+  end
+
   def test_public_validator_rejects_unmodeled_markdown_prose
     with_candidate do |candidate|
       path = File.join(candidate, "RUNNERS.md")
@@ -205,6 +221,23 @@ class RunnerCatalogTest < Minitest::Test
       update_source_hash(candidate, source_file)
       assert_validator_success(candidate, source)
     end
+  end
+
+  def test_trusted_workflow_verifies_published_catalogs_on_main_push
+    workflow = YAML.safe_load(File.read(File.expand_path("../.github/workflows/runner-catalog-trusted.yml", __dir__)), aliases: false)
+    trigger = workflow.fetch(true)
+    push_paths = trigger.fetch("push").fetch("paths")
+    %w[RUNNERS.md runner-catalog-manifest.json runner-profiles.json runner-profiles.yaml script/validate_runner_catalog.rb test/runner_catalog_test.rb .github/workflows/runner-catalog.yml .github/workflows/runner-catalog-trusted.yml].each do |path|
+      assert_includes push_paths, path
+    end
+    verify = workflow.fetch("jobs").fetch("verify-published")
+    assert_equal "github.event_name == 'push'", verify.fetch("if")
+    steps = verify.fetch("steps")
+    source_checkout = steps.find { |step| step.fetch("with", {}).fetch("repository", nil) == "akua-dev/gitops" }
+    refute_nil source_checkout
+    assert_equal "${{ secrets.GITOPS_READ_TOKEN }}", source_checkout.fetch("with").fetch("token")
+    validation = steps.find { |step| step.fetch("name", "") == "Validate generated catalog against canonical source" }
+    assert_equal "ruby script/validate_runner_catalog.rb --candidate-root . --source-root .gitops-source", validation.fetch("run")
   end
 
   private
