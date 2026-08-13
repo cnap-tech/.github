@@ -266,7 +266,7 @@ class RunnerCatalogTest < Minitest::Test
 
   def public_profiles
     SOURCE_IDENTITIES.map do |label, values|
-      source_id, source_class, source_name, id, profile_class, display_name = values
+      id, profile_class, display_name = values.last(3)
       capabilities = if label == "akua-x64-ci-v2"
         [BASELINE]
       else
