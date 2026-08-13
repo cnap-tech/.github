@@ -8,6 +8,7 @@ on:
       - runner-profiles.json
       - runner-profiles.yaml
       - script/validate_runner_catalog.rb
+      - script/check_runner_catalog_lifecycle.rb
       - .github/workflows/runner-catalog.yml
       - .github/workflows/runner-catalog-trusted.yml
   push:
@@ -18,7 +19,9 @@ on:
       - runner-profiles.json
       - runner-profiles.yaml
       - script/validate_runner_catalog.rb
+      - script/check_runner_catalog_lifecycle.rb
       - test/runner_catalog_test.rb
+      - test/runner_catalog_lifecycle_test.rb
       - .github/workflows/runner-catalog.yml
       - .github/workflows/runner-catalog-trusted.yml
 
@@ -33,23 +36,36 @@ jobs:
       - uses: actions/checkout@v6
       - name: Exercise trusted validator contract
         run: ruby test/runner_catalog_test.rb
+      - name: Exercise catalog lifecycle contract
+        run: ruby test/runner_catalog_lifecycle_test.rb
 
   verify-published:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Detect published catalog
-        id: publication
-        shell: bash
+        with:
+          fetch-depth: 0
+      - name: Materialize previous main tree
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
-          if [[ -e RUNNERS.md || -e runner-catalog-manifest.json || -e runner-profiles.json || -e runner-profiles.yaml ]]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
+          mkdir -p .previous
+          if [[ -z "$BEFORE" || "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+            exit 0
           fi
+          git cat-file -e "${BEFORE}^{commit}"
+          for path in RUNNERS.md runner-catalog-manifest.json runner-profiles.json runner-profiles.yaml; do
+            if git cat-file -e "${BEFORE}:${path}" 2>/dev/null; then
+              mkdir -p ".previous/$(dirname "$path")"
+              git show "${BEFORE}:${path}" > ".previous/$path"
+            fi
+          done
+      - name: Check catalog lifecycle
+        id: lifecycle
+        run: echo "action=$(ruby script/check_runner_catalog_lifecycle.rb --previous-root .previous --current-root .)" >> "$GITHUB_OUTPUT"
       - name: Resolve canonical source revision
-        if: steps.publication.outputs.present == 'true'
+        if: steps.lifecycle.outputs.action == 'validate'
         id: catalog-provenance
         shell: ruby {0}
         run: |
@@ -60,7 +76,7 @@ jobs:
           abort "missing source revision" unless provenance.fetch("revision", "").match?(/\A[0-9a-f]{40}\z/)
           File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |output| output.puts("revision=#{provenance.fetch("revision")}") }
       - name: Checkout canonical runner source
-        if: steps.publication.outputs.present == 'true'
+        if: steps.lifecycle.outputs.action == 'validate'
         uses: actions/checkout@v6
         with:
           repository: akua-dev/gitops
@@ -71,7 +87,7 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Validate generated catalog against canonical source
-        if: steps.publication.outputs.present == 'true'
+        if: steps.lifecycle.outputs.action == 'validate'
         run: ruby script/validate_runner_catalog.rb --candidate-root . --source-root .gitops-source
 
   verify:
@@ -91,7 +107,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           path: .candidate
           persist-credentials: false
+      - name: Check catalog lifecycle
+        id: lifecycle
+        run: echo "action=$(ruby .trusted/script/check_runner_catalog_lifecycle.rb --previous-root .trusted --current-root .candidate)" >> "$GITHUB_OUTPUT"
       - name: Resolve canonical source revision
+        if: steps.lifecycle.outputs.action == 'validate'
         id: catalog-provenance
         shell: ruby {0}
         run: |
@@ -102,6 +122,7 @@ jobs:
           abort "missing source revision" unless provenance.fetch("revision", "").match?(/\A[0-9a-f]{40}\z/)
           File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |output| output.puts("revision=#{provenance.fetch("revision")}") }
       - name: Checkout canonical runner source
+        if: steps.lifecycle.outputs.action == 'validate'
         uses: actions/checkout@v6
         with:
           repository: akua-dev/gitops
@@ -112,4 +133,5 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Validate generated catalog against canonical source
+        if: steps.lifecycle.outputs.action == 'validate'
         run: ruby .trusted/script/validate_runner_catalog.rb --candidate-root .candidate --source-root .gitops-source

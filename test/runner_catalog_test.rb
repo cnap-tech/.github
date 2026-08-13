@@ -227,7 +227,7 @@ class RunnerCatalogTest < Minitest::Test
     workflow = YAML.safe_load(File.read(File.expand_path("../.github/workflows/runner-catalog-trusted.yml", __dir__)), aliases: false)
     trigger = workflow.fetch(true)
     push_paths = trigger.fetch("push").fetch("paths")
-    %w[RUNNERS.md runner-catalog-manifest.json runner-profiles.json runner-profiles.yaml script/validate_runner_catalog.rb test/runner_catalog_test.rb .github/workflows/runner-catalog.yml .github/workflows/runner-catalog-trusted.yml].each do |path|
+    %w[RUNNERS.md runner-catalog-manifest.json runner-profiles.json runner-profiles.yaml script/validate_runner_catalog.rb script/check_runner_catalog_lifecycle.rb test/runner_catalog_test.rb test/runner_catalog_lifecycle_test.rb .github/workflows/runner-catalog.yml .github/workflows/runner-catalog-trusted.yml].each do |path|
       assert_includes push_paths, path
     end
     verify = workflow.fetch("jobs").fetch("verify-published")
@@ -238,6 +238,12 @@ class RunnerCatalogTest < Minitest::Test
     assert_equal "${{ secrets.GITOPS_READ_TOKEN }}", source_checkout.fetch("with").fetch("token")
     validation = steps.find { |step| step.fetch("name", "") == "Validate generated catalog against canonical source" }
     assert_equal "ruby script/validate_runner_catalog.rb --candidate-root . --source-root .gitops-source", validation.fetch("run")
+    lifecycle = steps.find { |step| step.fetch("name", "") == "Check catalog lifecycle" }
+    assert_equal "echo \"action=$(ruby script/check_runner_catalog_lifecycle.rb --previous-root .previous --current-root .)\" >> \"$GITHUB_OUTPUT\"", lifecycle.fetch("run")
+    assert_equal "steps.lifecycle.outputs.action == 'validate'", validation.fetch("if")
+    pull_request_verify = workflow.fetch("jobs").fetch("verify")
+    pull_request_lifecycle = pull_request_verify.fetch("steps").find { |step| step.fetch("name", "") == "Check catalog lifecycle" }
+    assert_equal "echo \"action=$(ruby .trusted/script/check_runner_catalog_lifecycle.rb --previous-root .trusted --current-root .candidate)\" >> \"$GITHUB_OUTPUT\"", pull_request_lifecycle.fetch("run")
   end
 
   private
