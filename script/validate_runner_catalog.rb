@@ -17,6 +17,37 @@ class RunnerCatalogValidator
     "serviceContainers" => "service containers",
     "privilegedContainers" => "privileged containers"
   }.freeze
+  PUBLIC_CAPABILITIES = (CAPABILITY_NAMES.values + [BASELINE_CAPABILITY]).freeze
+  PUBLIC_WORKLOADS = {
+    "akua-x64-ci-v2" => {
+      "recommended" => [
+        "linting, formatting, unit tests and ordinary compilation",
+        "jobs that do not start containers or require large local caches"
+      ],
+      "exclusions" => [
+        "Docker, Buildx and service containers",
+        "workloads whose requirements exceed the Standard guarantees"
+      ]
+    },
+    "akua-docker-ci-v2" => {
+      "recommended" => [
+        "Docker and Buildx image builds",
+        "integration tests using Docker or service containers"
+      ],
+      "exclusions" => [
+        "workloads whose requirements exceed the Docker guarantees; use Heavy only when all Heavy bounds fit"
+      ]
+    },
+    "akua-heavy-ci-v2" => {
+      "recommended" => [
+        "memory-heavy compilation, packaging and browser or integration suites that fit the Heavy guarantees",
+        "Docker jobs whose declared requirements exceed Docker but fit Heavy"
+      ],
+      "exclusions" => [
+        "workloads requiring more than 4 vCPU, 7168 MiB memory or 20480 MiB usable disk; use an external runner or reduce requirements"
+      ]
+    }
+  }.freeze
   SELECTION = {
     "safeMatch" => {
       "resources" => "required-at-most-guaranteed-minimum",
@@ -27,7 +58,9 @@ class RunnerCatalogValidator
   }.freeze
   PROFILE_KEYS = %w[capabilities class deprecation displayName id label minimumResources status workload].freeze
   METADATA_KEYS = %w[contractVersion documentation name provenance].freeze
-  BANNED_PUBLIC_KEYS = %w[allowedExternalLabelPatterns imageContractVersion platform runtimeSpecificLabelPatterns].freeze
+  PROVENANCE_KEYS = %w[path repository revision sha256].freeze
+  BANNED_PUBLIC_KEYS = %w[allowedExternalLabelPatterns backend distribution imageContractVersion node platform provider runtime runtimeSpecificLabelPatterns].freeze
+  BANNED_PUBLIC_VALUE = /\b(?:arc|fireactions|firecracker|hetzner|kata|kubernetes|ubuntu|containerd|kvm|proxmox)\b/i
 
   def initialize(candidate_root:, source_root: nil)
     @candidate_root = File.expand_path(candidate_root)
@@ -65,12 +98,14 @@ class RunnerCatalogValidator
     fail_with("documentation drift") unless metadata.fetch("documentation") == DOCUMENTATION
 
     provenance = metadata.fetch("provenance")
+    fail_with("provenance schema drift") unless provenance.keys.sort == PROVENANCE_KEYS
     fail_with("non-canonical provenance") unless provenance.slice("repository", "path") == {
       "repository" => "akua-dev/gitops",
       "path" => SOURCE_RELATIVE_PATH
     }
     fail_with("missing source revision") unless provenance.fetch("revision", "").match?(/\A[0-9a-f]{40}\z/)
     fail_with("missing source SHA-256") unless provenance.fetch("sha256", "").match?(/\A[0-9a-f]{64}\z/)
+    fail_with("runtime or provider detail in public catalog") if contains_forbidden_detail?(catalog)
 
     capacity = catalog.fetch("capacity")
     expected_capacity = {
@@ -101,7 +136,6 @@ class RunnerCatalogValidator
         "sunsetAt" => nil,
         "replacementLabel" => nil
       }
-      fail_with("runtime or provider detail in public catalog") if contains_banned_key?(profile)
     end
   end
 
@@ -192,7 +226,7 @@ class RunnerCatalogValidator
       "status" => source_profile.fetch("status"),
       "minimumResources" => source_profile.fetch("minimumResources"),
       "capabilities" => { "guaranteed" => normalize_capabilities(source_profile.fetch("capabilities")) },
-      "workload" => normalize_workload(source_profile.fetch("workload"), label, display_name),
+      "workload" => normalize_workload(label),
       "deprecation" => source_profile.fetch("deprecation").transform_values { |value| value == "" ? nil : value }
     }
   end
@@ -203,39 +237,24 @@ class RunnerCatalogValidator
     else
       CAPABILITY_NAMES.filter_map { |key, name| name if capabilities.fetch(key, false) }
     end
-    result << BASELINE_CAPABILITY unless result.include?(BASELINE_CAPABILITY)
+    fail_with("source capability not allowlisted") unless result.all? { |capability| PUBLIC_CAPABILITIES.include?(capability) }
+    fail_with("source missing baseline capability") unless result.include?(BASELINE_CAPABILITY)
     result
   end
 
-  def normalize_workload(workload, label, display_name)
-    recommended = workload.fetch("recommended").map { |text| text.gsub("GitHub Actions ", "") }
-    if label == "akua-heavy-ci-v2"
-      recommended[0] = "#{recommended.fetch(0)} that fit the Heavy guarantees" unless recommended.fetch(0).include?("fit the Heavy guarantees")
-      recommended[1] = recommended.fetch(1).sub("the Docker profile", "Docker") + " but fit Heavy" unless recommended.fetch(1).include?("fit Heavy")
-    end
-    exclusions = workload.fetch("exclusions").reject { |text| text.match?(/nested virtualization|KVM|architecture-specific/i) }
-    exclusions.map! do |text|
-      case text
-      when /workloads declaring resources above this profile; use the heavy profile/i
-        "workloads whose requirements exceed the Docker guarantees; use Heavy only when all Heavy bounds fit"
-      when /workloads requiring more than the stated minimum resource contract/i
-        "workloads requiring more than 4 vCPU, 7168 MiB memory or 20480 MiB usable disk; use an external runner or reduce requirements"
-      else
-        text
-      end
-    end
-    if label == "akua-x64-ci-v2"
-      exclusions << "workloads whose requirements exceed the Standard guarantees" unless exclusions.any? { |text| text.include?("requirements exceed") }
-    end
-    { "recommended" => recommended, "exclusions" => exclusions }
+  def normalize_workload(label)
+    fail_with("source profile label not allowlisted") unless PUBLIC_WORKLOADS.key?(label)
+    PUBLIC_WORKLOADS.fetch(label)
   end
 
-  def contains_banned_key?(value)
+  def contains_forbidden_detail?(value)
     case value
     when Hash
-      value.any? { |key, child| BANNED_PUBLIC_KEYS.include?(key) || contains_banned_key?(child) }
+      value.any? { |key, child| BANNED_PUBLIC_KEYS.include?(key) || contains_forbidden_detail?(key) || contains_forbidden_detail?(child) }
     when Array
-      value.any? { |child| contains_banned_key?(child) }
+      value.any? { |child| contains_forbidden_detail?(child) }
+    when String
+      value.match?(BANNED_PUBLIC_VALUE)
     else
       false
     end
