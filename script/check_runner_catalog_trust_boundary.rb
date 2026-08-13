@@ -88,7 +88,7 @@ class RunnerCatalogTrustBoundary
     fail_with("trusted source checkout missing") unless source_index
     fail_with("trusted workflow boundary ordering drift") unless boundary_index < source_index && tests_index < source_index
     fail_with("trusted boundary must use base-owned files") unless steps.fetch(boundary_index).fetch("run") == "ruby .trusted/script/check_runner_catalog_trust_boundary.rb --trusted-root .trusted --candidate-root .candidate"
-    fail_with("base-owned tests must use trusted files") unless steps.fetch(tests_index).fetch("run") == "ruby .trusted/test/runner_catalog_test.rb && ruby .trusted/test/runner_catalog_lifecycle_test.rb && ruby .trusted/test/runner_catalog_trust_boundary_test.rb"
+    fail_with("base-owned tests must run from trusted root") unless steps.fetch(tests_index).fetch("run") == "cd .trusted && ruby test/runner_catalog_test.rb && ruby test/runner_catalog_lifecycle_test.rb && ruby test/runner_catalog_trust_boundary_test.rb"
   end
 
   def fail_with(message)
